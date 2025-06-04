@@ -1,0 +1,64 @@
+{
+  "indexer": {
+    "enabled": true,
+    "chunking": {
+      "strategy": "paragraph",
+      "chunk_size": 1000,
+      "chunk_overlap": 200,
+      "min_chunk_size": 100,
+      "max_chunk_size": 2000
+    },
+    "metadata": {
+      "extract_title": true,
+      "extract_dates": true,
+      "standardize_dates": true,
+      "custom_metadata": {
+        "organization": "Arshai",
+        "indexed_by": "Arshai RAG System"
+      }
+    },
+    "vector_db": {
+      "type": "milvus",
+      "host": "localhost",
+      "port": 19530,
+      "db_name": "arshai_docs",
+      "collection_name": "documents"
+    },
+    "loaders": {
+      "pdf": {
+        "extract_images": false
+      },
+      "docx": {
+        "extract_headers_footers": true,
+        "per_paragraph": false,
+        "prefer_docx2txt": true
+      },
+      "pptx": {
+        "extract_notes": true,
+        "extract_hidden_slides": false
+      }
+    }
+  },
+  "embeddings": {
+    "provider": "openai",
+    "model": "text-embedding-3-small",
+    "batch_size": 32,
+    "additional_params": {
+      "api_key": "your-api-key-here"
+    }
+  },
+  "retriever": {
+    "provider": "vector_db",
+    "top_k": 5,
+    "search_kwargs": {
+      "filter": null,
+      "score_threshold": 0.75,
+      "fetch_k": 10
+    }
+  },
+  "reranker": {
+    "provider": "cohere",
+    "model": "rerank-english-v2.0",
+    "top_k": 3
+  }
+} 

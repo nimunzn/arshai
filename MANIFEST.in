@@ -1,0 +1,14 @@
+include README.md
+include LICENSE
+include pyproject.toml
+recursive-include arshai *.py
+recursive-include arshai *.json
+recursive-include arshai *.yaml
+recursive-include arshai *.yml
+recursive-exclude tests *
+recursive-exclude examples *
+recursive-exclude docs *
+recursive-exclude scripts *
+global-exclude *.pyc
+global-exclude __pycache__
+global-exclude .DS_Store
