@@ -67,4 +67,8 @@ var/
 previous_project/
 
 # Logs
-*.log 
+*.log
+
+# Documentation build files
+docs_sphinx/_build/
+docs_sphinx/.doctrees/ 
