@@ -43,6 +43,14 @@ aiohttp = "^3.11.16"
 requests = "^2.32.3"
 voyageai = "^0.3.2"
 pdf2image = "^1.17.0"
+# Documentation dependencies (optional)
+sphinx = {version = "^7.0.0", optional = true}
+sphinx-rtd-theme = {version = "^2.0.0", optional = true}
+sphinx-autodoc-typehints = {version = "^1.24.0", optional = true}
+myst-parser = {version = "^2.0.0", optional = true}
+sphinx-copybutton = {version = "^0.5.2", optional = true}
+sphinxcontrib-mermaid = {version = "^0.9.2", optional = true}
+furo = {version = "^2023.9.10", optional = true}
 
 [tool.poetry.extras]
 redis = ["redis"]
