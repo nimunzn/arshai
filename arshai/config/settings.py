@@ -28,6 +28,7 @@ from .config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
 
+
 class Settings(ISetting):
     """
     Settings implementation for Arshai.

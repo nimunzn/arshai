@@ -2,7 +2,7 @@ from openai import AzureOpenAI
 import json
 import os
 from typing import List, Dict, Callable, Any, Optional, TypeVar, Type, Union, Generic, AsyncGenerator
-from arshai.core.interfaces import ILLM, ILLMConfig, ILLMInput, ILLMOutput
+from arshai.core.interfaces.illm import ILLM, ILLMConfig, ILLMInput, ILLMOutput
 import logging
 T = TypeVar('T')
 
@@ -240,10 +240,16 @@ class AzureClient(ILLM):
                 else:
                     raise ValueError("Model did not provide structured response")
             
+
+            messages = [
+            {"role": "system", "content": input.system_prompt},
+            {"role": "user", "content": input.user_message}
+            ]
+                
             # Simple completion without structure
             response = self._client.chat.completions.create(
                 model=self.config.model,
-                messages=input.messages,
+                messages=messages,
                 temperature=self.config.temperature
             )
             
@@ -272,7 +278,9 @@ class AzureClient(ILLM):
             all_tools = [structure_function] + input.tools_list
             messages[0]["content"] += f"""\nYou MUST ALWAYS use the {input.structure_type.__name__.lower()} tool/function to format your response.
                                             Your response ALWAYS MUST be retunrned using the tool, independently of what is the message or response are.
-                                            You MUST ALWAYS CALLING TOOLS FOR RETURNING RESPONSE"""
+                                            You MUST ALWAYS CALLING TOOLS FOR RETURNING RESPONSE
+                                            The response Must be in JSON format
+                                            """
             response_format = {"type": "json_object"}
         else:
             all_tools = input.tools_list
@@ -354,8 +362,7 @@ class AzureClient(ILLM):
                                 collected_message["function_call"]["arguments"] += delta.function_call.arguments
                                 
                                 # Try to parse and stream structured response
-                                if (input.structure_type and 
-                                    collected_message["function_call"]["name"] == input.structure_type.__name__.lower()):
+                                if input.structure_type and collected_message["function_call"]["name"] == input.structure_type.__name__.lower():
                                     
                                     # Use the safe parsing function
                                     has_previous_delta = True
@@ -367,7 +374,7 @@ class AzureClient(ILLM):
                                         except json.JSONDecodeError:
                                             continue          
 
-                                elif collected_message["function_call"]["name"]:
+                                elif collected_message["function_call"]["name"]  != input.structure_type.__name__.lower():
                                     function_name = collected_message["function_call"]["name"]
                                     args_str = collected_message["function_call"]["arguments"].strip()
 
@@ -375,8 +382,7 @@ class AzureClient(ILLM):
                                         function_args = json.loads(collected_message["function_call"]["arguments"])
                                         if function_name in input.callable_functions:
                                             function_response = input.callable_functions[function_name](**function_args)
-                                            
-                                            self.logger.info(f"Function {function_name} response: {function_response}")
+                                            self.logger.debug(f"Function {function_name} response: {function_response}")
                                             # Add function response to messages
                                             if isinstance(function_response, str):
                                                 role = "function"
@@ -391,27 +397,6 @@ class AzureClient(ILLM):
                                             ])
                                             current_turn += 1
                                             continue
-            
-            # At this point, streaming is complete
-            # We've already captured usage data from the dedicated usage chunk
-            # via the include_usage=True parameter
-            # No need for additional extraction from full_response
-            
-            # Final yield with the complete response and accumulated usage
-            # if is_finished:
-            #     if not input.structure_type:
-            #         yield {"llm_response": collected_message["content"], "usage": accumulated_usage}
-            #     elif collected_message["function_call"] and collected_message["function_call"]["name"]:
-            #         try:
-            #             args_str = collected_message["function_call"]["arguments"].strip()
-            #             if args_str.startswith("{") and args_str.endswith("}"):
-            #                 function_args = json.loads(args_str)
-            #                 if collected_message["function_call"]["name"] == input.structure_type.__name__.lower():
-            #                     final_structure = input.structure_type(**function_args)
-            #                     self.logger.info(f"Final usage: {accumulated_usage}")
-            #                     yield {"llm_response": final_structure, "usage": accumulated_usage}
-            #         except (json.JSONDecodeError, TypeError, ValueError):
-            #             pass
 
         yield {"llm_response": None, "usage": accumulated_usage}
 

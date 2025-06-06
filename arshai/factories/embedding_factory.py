@@ -6,6 +6,7 @@ from typing import Dict, Any, Type, Optional
 from arshai.core.interfaces.iembedding import IEmbedding, EmbeddingConfig
 from ..embeddings.openai_embeddings import OpenAIEmbedding
 from ..embeddings.mgte_embeddings import MGTEEmbedding
+from ..embeddings.voyageai_embedding import VoyageAIEmbedding
 
 class EmbeddingFactory:
     """Factory for creating embedding instances."""
@@ -14,6 +15,7 @@ class EmbeddingFactory:
     _providers = {
         "openai": OpenAIEmbedding,
         "mgte": MGTEEmbedding,
+        "voyage": VoyageAIEmbedding
     }
     
     @classmethod
@@ -52,7 +54,7 @@ class EmbeddingFactory:
         
 
 
-        embedding_config = EmbeddingConfig(model_name=config.get("model"),
+        embedding_config = EmbeddingConfig(model_name=config.get("model_name"),
                                            additional_params=config.copy(),
                                            batch_size=config.get("batch_size", 16))
 

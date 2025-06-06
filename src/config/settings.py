@@ -5,15 +5,15 @@ Settings implementation for Arshai using ConfigManager.
 import logging
 import os
 from typing import Any, Dict, Optional, List, Type
-from arshai.core.interfaces import ISetting
-from arshai.core.interfaces import ILLM, ILLMConfig
-from arshai.core.interfaces import IMemoryManager
-from arshai.core.interfaces import IReranker
-from arshai.core.interfaces import IAgent, IAgentConfig
-from arshai.core.interfaces import IEmbedding
-from arshai.core.interfaces import IVectorDBClient
-from arshai.core.interfaces import IWebSearchClient
-from arshai.core.interfaces import ISpeechProcessor, ISpeechConfig
+from arshai.core.interfaces.isetting import ISetting
+from arshai.core.interfaces.illm import ILLM, ILLMConfig
+from arshai.core.interfaces.imemorymanager import IMemoryManager
+from arshai.core.interfaces.ireranker import IReranker
+from arshai.core.interfaces.iagent import IAgent, IAgentConfig
+from arshai.core.interfaces.iembedding import IEmbedding
+from arshai.core.interfaces.ivector_db_client import IVectorDBClient
+from arshai.core.interfaces.iwebsearch import IWebSearchClient
+from arshai.core.interfaces.ispeech import ISpeechProcessor, ISpeechConfig
 
 from ..factories.llm_factory import LLMFactory
 from ..factories.memory_factory import MemoryFactory
@@ -27,6 +27,7 @@ from ..factories.speech_factory import SpeechFactory
 from .config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
+
 
 class Settings(ISetting):
     """

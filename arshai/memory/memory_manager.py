@@ -74,6 +74,22 @@ class MemoryManagerService:
         Returns:
             str: Memory ID for the stored data
         """
+
+        logger.info(f"Storing working memory: {memory_data}")
+
+        if not hasattr(memory_data, "working_memory"):
+            # Direct conversion to string using string representation
+            import json
+            try:
+                # Try to convert using JSON for clean formatting
+                string_working_memory = json.dumps(memory_data, indent=2)
+            except (TypeError, ValueError):
+                # Fall back to simple string representation if JSON fails
+                string_working_memory = str(memory_data)
+            
+            memory_data = IWorkingMemory(working_memory=string_working_memory)
+
+
         memory_input = IMemoryInput(
             conversation_id=conversation_id,
             memory_type=ConversationMemoryType.WORKING_MEMORY,
