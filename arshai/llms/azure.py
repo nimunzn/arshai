@@ -134,7 +134,10 @@ class AzureClient(ILLM):
                         function_response = input.callable_functions[function_name](**function_args)
                         self.logger.debug(f"Function response: {function_response}")
                         if isinstance(function_response, str):
-                            role = "function"
+                            if "base64" in function_response:
+                                role = "user"
+                            else:
+                                role = "function"
                         else:
                             role = "assistant"
 
@@ -385,7 +388,10 @@ class AzureClient(ILLM):
                                             self.logger.debug(f"Function {function_name} response: {function_response}")
                                             # Add function response to messages
                                             if isinstance(function_response, str):
-                                                role = "function"
+                                                if "base64" in function_response:
+                                                    role = "user"
+                                                else:
+                                                    role = "function"
                                             else:
                                                 role = "assistant"
                                             
