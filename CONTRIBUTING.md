@@ -389,16 +389,71 @@ Documentation is a crucial part of the project. Please follow these guidelines:
 3. **Include code examples** where appropriate
 4. **Make diagrams and visuals** for complex concepts
 
-## Releases
+## Releases and PyPI Deployment
 
-The release process follows these steps:
+Arshai uses an automated CI/CD pipeline for PyPI deployment. **Only maintainers** should create releases.
 
-1. **Update version** in `pyproject.toml`
-2. **Update CHANGELOG.md** with notable changes
-3. **Create a release branch** (`release/vX.Y.Z`)
-4. **Create a tag** (`vX.Y.Z`)
-5. **Merge to main** once all tests pass
-6. **Publish to PyPI** via CI/CD
+### Release Process
+
+1. **Update version numbers**:
+   ```bash
+   # Update version in pyproject.toml
+   version = "X.Y.Z"
+   
+   # Update version in arshai/_version.py
+   __version__ = "X.Y.Z"
+   __version_info__ = (X, Y, Z)
+   ```
+
+2. **Commit and push changes**:
+   ```bash
+   git add pyproject.toml arshai/_version.py
+   git commit -m "chore: bump version to X.Y.Z"
+   git push origin main
+   ```
+
+3. **Create and push git tag**:
+   ```bash
+   git tag vX.Y.Z
+   git push origin vX.Y.Z
+   ```
+
+4. **Create GitHub Release**:
+   ```bash
+   gh release create vX.Y.Z --title "Release vX.Y.Z" --notes "Release notes here"
+   ```
+
+5. **Automated deployment**: Creating the GitHub release automatically triggers the PyPI deployment via GitHub Actions.
+
+### PyPI Deployment Workflow
+
+The deployment process is fully automated:
+
+- **Trigger**: GitHub release creation
+- **Workflow**: `.github/workflows/publish.yml`
+- **Requirements**: `PYPI_TOKEN` secret configured in repository settings
+- **Process**:
+  1. Checkout code
+  2. Set up Python and Poetry
+  3. Install dependencies
+  4. Build package with `poetry build`
+  5. Publish to PyPI with `poetry publish`
+
+### Version Numbering
+
+Follow [Semantic Versioning](https://semver.org/):
+- **Major (X.0.0)**: Breaking changes
+- **Minor (X.Y.0)**: New features, backward compatible
+- **Patch (X.Y.Z)**: Bug fixes, backward compatible
+
+### Prerequisites for Maintainers
+
+To deploy releases, maintainers need:
+1. **Write access** to the repository
+2. **PyPI token** configured as `PYPI_TOKEN` secret
+3. **PyPI project permissions** for the arshai package
+
+For detailed deployment instructions, see the [Deployment Guide](docs/deployment/pypi-deployment.md).
 
 ## License
 

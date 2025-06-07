@@ -130,9 +130,7 @@ Basic Usage
    :maxdepth: 2
    :caption: Deployment
 
-   deployment/production
-   deployment/scaling
-   deployment/monitoring
+   deployment/index
 
 .. toctree::
    :maxdepth: 2
