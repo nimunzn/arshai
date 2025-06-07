@@ -30,13 +30,15 @@ jobs:
       run: poetry build
     
     - name: Publish to Test PyPI
+      if: ${{ secrets.TEST_PYPI_TOKEN != '' }}
       env:
-        POETRY_PYPI_TOKEN_TEST_PYPI: ${{ secrets.TEST_PYPI_API_TOKEN }}
+        POETRY_PYPI_TOKEN_TEST_PYPI: ${{ secrets.TEST_PYPI_TOKEN }}
       run: |
         poetry config repositories.test-pypi https://test.pypi.org/legacy/
         poetry publish -r test-pypi
     
     - name: Test installation from Test PyPI
+      if: ${{ secrets.TEST_PYPI_TOKEN != '' }}
       run: |
         # Extract version from pyproject.toml
         VERSION=$(poetry version -s)
@@ -45,5 +47,5 @@ jobs:
     
     - name: Publish to PyPI
       env:
-        POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_API_TOKEN }}
+        POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_TOKEN }}
       run: poetry publish
