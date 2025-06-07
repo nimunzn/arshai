@@ -29,22 +29,6 @@ jobs:
     - name: Build package
       run: poetry build
     
-    - name: Publish to Test PyPI
-      if: ${{ secrets.TEST_PYPI_TOKEN != '' }}
-      env:
-        POETRY_PYPI_TOKEN_TEST_PYPI: ${{ secrets.TEST_PYPI_TOKEN }}
-      run: |
-        poetry config repositories.test-pypi https://test.pypi.org/legacy/
-        poetry publish -r test-pypi
-    
-    - name: Test installation from Test PyPI
-      if: ${{ secrets.TEST_PYPI_TOKEN != '' }}
-      run: |
-        # Extract version from pyproject.toml
-        VERSION=$(poetry version -s)
-        pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple arshai==$VERSION
-        python -c "import arshai; print(f'Successfully installed arshai {arshai.__version__}')"
-    
     - name: Publish to PyPI
       env:
         POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_TOKEN }}
