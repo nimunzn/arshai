@@ -1,8 +1,8 @@
 from PIL import Image
 from typing import Dict, Any, List, Optional, Union
-from ...seedwork.interfaces.itool import ITool
-from ...seedwork.interfaces.isetting import ISetting
-from ...seedwork.interfaces.idocument import Document
+from arshai.core.interfaces.itool import ITool
+from arshai.core.interfaces.isetting import ISetting
+from arshai.core.interfaces.idocument import Document
 import logging
 
 class MultimodalKnowledgeBaseRetrievalTool(ITool):
