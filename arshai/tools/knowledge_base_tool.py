@@ -102,7 +102,7 @@ class KnowledgeBaseRetrievalTool(ITool):
             
         return "\n".join(formatted_results)
 
-    async def aexecute(self, query: str) -> str:
+    async def aexecute(self, query: str) -> List[Dict[str, Any]]:
         """
         Asynchronous execution of the knowledge retrieval using vector search
         
@@ -110,7 +110,7 @@ class KnowledgeBaseRetrievalTool(ITool):
             query: A standalone question containing all required context
             
         Returns:
-            str: Retrieved relevant knowledge from the vector database
+            List[Dict[str, Any]]: List of content objects in the format required by the LLM
         """
 
         try:
@@ -136,15 +136,16 @@ class KnowledgeBaseRetrievalTool(ITool):
             
             # Format the search results
             if search_results and len(search_results) > 0:
-                return self._format_search_results(search_results)
+                formatted_text = self._format_search_results(search_results)
+                return [{"type": "text", "text": formatted_text}]
             else:
-                return "No relevant information found."
+                return [{"type": "text", "text": "No relevant information found."}]
                 
         except Exception as e:
             self.logger.error(f"Error during vector search: {str(e)}")
-            return f"Error retrieving knowledge: {str(e)}"
+            return [{"type": "text", "text": f"Error retrieving knowledge: {str(e)}"}]
 
-    def execute(self, query: str) -> str:
+    def execute(self, query: str) -> List[Dict[str, Any]]:
         """
         Synchronous execution of the knowledge retrieval using vector search
         
@@ -152,7 +153,7 @@ class KnowledgeBaseRetrievalTool(ITool):
             query: A standalone question containing all required context
             
         Returns:
-            str: Retrieved relevant knowledge from the vector database
+            List[Dict[str, Any]]: List of content objects in the format required by the LLM
         """
 
         try:
@@ -179,10 +180,11 @@ class KnowledgeBaseRetrievalTool(ITool):
             # Format the search results
             if search_results and len(search_results) > 0:
                 self.logger.info(f"search_results: {len(search_results)}")
-                return self._format_search_results(search_results)
+                formatted_text = self._format_search_results(search_results)
+                return [{"type": "text", "text": formatted_text}]
             else:
-                return "No relevant information found."
+                return [{"type": "text", "text": "No relevant information found."}]
                 
         except Exception as e:
             self.logger.error(f"Error during vector search: {str(e)}")
-            return f"Error retrieving knowledge: {str(e)}"
+            return [{"type": "text", "text": f"Error retrieving knowledge: {str(e)}"}]

@@ -134,17 +134,17 @@ class AzureClient(ILLM):
                         function_response = input.callable_functions[function_name](**function_args)
                         self.logger.debug(f"Function response: {function_response}")
                         
-                        # Always use role="function" for function responses to avoid content format issues
+                        # Function responses are now in proper content format, use directly
                         messages.append({
                             "role": "function",
                             "name": function_name,
                             "content": function_response
                         })
                         
-                        # Add system message as separate message
+                        # System messages use array content format
                         messages.append({
                             "role": "system",
-                            "content": f"You MUST NOT use and call the {function_name} tool AGAIN as it has already been used"
+                            "content": [{"type": "text", "text": f"You MUST NOT use and call the {function_name} tool AGAIN as it has already been used"}]
                         })
                     else:
                         raise ValueError(f"Function {function_name} not found in available functions")
@@ -386,17 +386,17 @@ class AzureClient(ILLM):
                                             function_response = input.callable_functions[function_name](**function_args)
                                             self.logger.debug(f"Function {function_name} response: {function_response}")
                                             
-                                            # Always use role="function" for function responses to avoid content format issues
+                                            # Function responses are now in proper content format, use directly
                                             messages.append({
                                                 "role": "function",
                                                 "name": function_name,
                                                 "content": function_response
                                             })
                                             
-                                            # Add system message as separate message
+                                            # System messages use array content format
                                             messages.append({
                                                 "role": "system",
-                                                "content": f"You MUST NOT use and call the {function_name} tool AGAIN as it has already been used"
+                                                "content": [{"type": "text", "text": f"You MUST NOT use and call the {function_name} tool AGAIN as it has already been used"}]
                                             })
                                             
                                             current_turn += 1
@@ -480,10 +480,6 @@ class AzureClient(ILLM):
                                 # Continue collecting if we can't parse yet
                                 continue
                 
-                # Stream is complete
-                # Usage data already captured from dedicated usage chunk
-                # No need for additional extraction from full_response
-                
                 # Final yield with usage
                 if collected_message["function_call"]["arguments"]:
                     try:
@@ -519,10 +515,6 @@ class AzureClient(ILLM):
                         content = chunk.choices[0].delta.content
                         complete_content += content
                         yield {"llm_response": content}
-                
-                # Stream is complete
-                # Usage data already captured from dedicated usage chunk
-                # No need for additional extraction from full_response
                 
                 # Final yield with usage
                 yield {"llm_response": complete_content, "usage": usage}
