@@ -25,13 +25,13 @@ _workflow_imports = _import_if_exists("iworkflow", [
 _workflow_runner_imports = _import_if_exists("iworkflowrunner", ["IWorkflowRunner"])
 
 # Memory interfaces
-_memory_imports = _import_if_exists("imemorymanager", ["IMemoryManager", "IWorkingMemory"])
+_memory_imports = _import_if_exists("imemorymanager", ["IMemoryManager", "IWorkingMemory", "ConversationMemoryType", "IMemoryInput"])
 
 # Tool interfaces
 _tool_imports = _import_if_exists("itool", ["ITool", "IToolExecutor"])
 
 # LLM interfaces
-_llm_imports = _import_if_exists("illm", ["ILLM", "ILLMResponse"])
+_llm_imports = _import_if_exists("illm", ["ILLM", "ILLMResponse", "ILLMConfig", "ILLMInput", "LLMInputType", "ILLMOutput", "ILLMStreamOutput"])
 
 # Document interfaces
 _document_imports = _import_if_exists("idocument", ["IDocument", "IDocumentMetadata", "Document"])

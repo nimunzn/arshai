@@ -5,7 +5,7 @@ OpenAI embeddings implementation.
 import logging
 from typing import List, Dict, Any, Optional, Union, Tuple
 import os
-from ...seedwork.interfaces.iembedding import EmbeddingConfig, IEmbedding
+from arshai.core.interfaces.iembedding import EmbeddingConfig, IEmbedding
 import voyageai
 from PIL.Image import Image
 
