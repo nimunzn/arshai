@@ -133,20 +133,19 @@ class AzureClient(ILLM):
                     if function_name in input.callable_functions:
                         function_response = input.callable_functions[function_name](**function_args)
                         self.logger.debug(f"Function response: {function_response}")
-                        if isinstance(function_response, str):
-                            if "base64" in function_response:
-                                role = "user"
-                            else:
-                                role = "function"
-                        else:
-                            role = "assistant"
-
+                        
+                        # Always use role="function" for function responses to avoid content format issues
                         messages.append({
-                            "role": role,
+                            "role": "function",
                             "name": function_name,
                             "content": function_response
                         })
-                        messages.append({"role": "system", "content": f"You MUST NOT use and call the {function_name} tool AGAIN as it has already been used"})
+                        
+                        # Add system message as separate message
+                        messages.append({
+                            "role": "system",
+                            "content": f"You MUST NOT use and call the {function_name} tool AGAIN as it has already been used"
+                        })
                     else:
                         raise ValueError(f"Function {function_name} not found in available functions")
                 
@@ -377,7 +376,7 @@ class AzureClient(ILLM):
                                         except json.JSONDecodeError:
                                             continue          
 
-                                elif collected_message["function_call"]["name"]  != input.structure_type.__name__.lower():
+                                elif collected_message["function_call"]["name"] != input.structure_type.__name__.lower():
                                     function_name = collected_message["function_call"]["name"]
                                     args_str = collected_message["function_call"]["arguments"].strip()
 
@@ -386,21 +385,20 @@ class AzureClient(ILLM):
                                         if function_name in input.callable_functions:
                                             function_response = input.callable_functions[function_name](**function_args)
                                             self.logger.debug(f"Function {function_name} response: {function_response}")
-                                            # Add function response to messages
-                                            if isinstance(function_response, str):
-                                                if "base64" in function_response:
-                                                    role = "user"
-                                                else:
-                                                    role = "function"
-                                            else:
-                                                role = "assistant"
                                             
-                                            messages.extend([
-                                                {"role": role,
-                                                 "name": function_name,
-                                                 "content": function_response},
-                                                {"role": "system", "content": f"You MUST NOT use and call the {function_name} tool AGAIN as it has already been used"}
-                                            ])
+                                            # Always use role="function" for function responses to avoid content format issues
+                                            messages.append({
+                                                "role": "function",
+                                                "name": function_name,
+                                                "content": function_response
+                                            })
+                                            
+                                            # Add system message as separate message
+                                            messages.append({
+                                                "role": "system",
+                                                "content": f"You MUST NOT use and call the {function_name} tool AGAIN as it has already been used"
+                                            })
+                                            
                                             current_turn += 1
                                             continue
 
@@ -421,6 +419,12 @@ class AzureClient(ILLM):
             # For tracking complete content
             complete_content = ""
             
+            # Create messages array properly
+            messages = [
+                {"role": "system", "content": input.system_prompt},
+                {"role": "user", "content": input.user_message}
+            ]
+            
             if input.structure_type:
                 # Create structure function
                 structure_function = self._create_structure_function(input.structure_type)
@@ -430,7 +434,7 @@ class AzureClient(ILLM):
                     "role": "system",
                     "content": f"You MUST use the {input.structure_type.__name__.lower()} function to format your response."
                 }
-                all_messages = input.messages + [system_message]
+                all_messages = messages + [system_message]
                 
                 # Create the stream
                 stream = self._client.chat.completions.create(
@@ -491,7 +495,7 @@ class AzureClient(ILLM):
                 # Simple unstructured completion
                 stream = self._client.chat.completions.create(
                     model=self.config.model,
-                    messages=input.messages,
+                    messages=messages,
                     temperature=self.config.temperature,
                     stream=True,
                     stream_options={"include_usage": True}
