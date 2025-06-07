@@ -42,7 +42,7 @@ class SearxNGClient(IWebSearchClient):
         **kwargs: Any
     ) -> Dict[str, Any]:
         """Prepare search parameters"""
-        logger.info(f"Search Language: {self.config.language}")
+        logger.info(f"Search Language: {self.config.get('language')}")
         params = {
             'q': query,
             'format': 'json',

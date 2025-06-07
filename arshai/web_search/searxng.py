@@ -10,22 +10,11 @@ from arshai.core.interfaces.iwebsearch import IWebSearchConfig, IWebSearchClient
 
 logger = logging.getLogger(__name__)
 
-class SearxNGConfig(IWebSearchConfig):
-    """Configuration for SearxNG client"""
-    default_engines: List[str] = Field(
-        default=["google", "bing", "duckduckgo"],
-        description="Default search engines to use"
-    )
-    default_categories: List[str] = Field(
-        default=["general"],
-        description="Default categories to search in"
-    )
-
 
 class SearxNGClient(IWebSearchClient):
     """SearxNG search client implementation"""
     
-    def __init__(self, config: SearxNGConfig):
+    def __init__(self, config: dict):
         """Initialize SearxNG client with configuration"""
         self.config = config
         # Get host from config or environment variable
@@ -42,13 +31,13 @@ class SearxNGClient(IWebSearchClient):
         **kwargs: Any
     ) -> Dict[str, Any]:
         """Prepare search parameters"""
-        logger.info(f"Search Language: {self.config.language}")
+        logger.info(f"Search Language: {self.config.get('language')}")
         params = {
             'q': query,
             'format': 'json',
-            'engines': ','.join(engines or self.config.default_engines),
-            'categories': ','.join(categories or self.config.default_categories),
-            'language': self.config.language,
+            'engines': ','.join(engines or self.config.get('default_engines', [])),
+            'categories': ','.join(categories or self.config.get('default_categories', [])),
+            'language': self.config.get('language'),
             **kwargs
         }
         logger.info(f"Preparing search parameters: {params}")
@@ -88,8 +77,8 @@ class SearxNGClient(IWebSearchClient):
                 async with session.get(
                     f"{self.base_url}/search",
                     params=params,
-                    timeout=self.config.timeout,
-                    ssl=self.config.verify_ssl
+                    timeout=self.config.get('timeout', 10),
+                    ssl=self.config.get('verify_ssl', True)
                 ) as response:
                     if response.status != 200:
                         raise Exception(f"Search failed with status {response.status}")
@@ -117,8 +106,8 @@ class SearxNGClient(IWebSearchClient):
             response = requests.get(
                 f"{self.base_url}/search",
                 params=params,
-                timeout=self.config.timeout,
-                verify=self.config.verify_ssl
+                timeout=self.config.get('timeout', 10),
+                verify=self.config.get('verify_ssl', True)
             )
             response.raise_for_status()
             
