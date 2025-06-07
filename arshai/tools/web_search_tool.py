@@ -1,4 +1,4 @@
-from typing import Dict, Tuple
+from typing import Dict, List, Any
 from arshai.core.interfaces.itool import ITool
 from arshai.core.interfaces.iwebsearch import IWebSearchClient
 import logging
@@ -41,7 +41,7 @@ class WebSearchTool(ITool):
             }
         }
 
-    def execute(self, query: str) -> Tuple[str, str]:
+    def execute(self, query: str) -> List[Dict[str, Any]]:
         """
         Execute web search using search engines
         
@@ -49,25 +49,26 @@ class WebSearchTool(ITool):
             query: A standalone question containing all required context
             
         Returns:
-            Tuple[str, str]: Tuple containing:
-                - Retrieved relevant information from web search
-                - Retrieved URLs from web search which are used to cite the sources
+            List[Dict[str, Any]]: List of content objects in the format required by the LLM
         """
         if not self.search_client:
             logger.error("Cannot perform search: No search client available")
-            return "No search capability available. Please check configuration.", ""
+            return [{"type": "text", "text": "No search capability available. Please check configuration."}]
             
         results = self.search_client.search(query)
         if not results:
-            return "No results found.", ""
+            return [{"type": "text", "text": "No results found."}]
             
         # Format results into context and URLs
         context = "\n\n".join(f"{r.title}\n{r.content}" for r in results if r.content)
         urls = "\n".join(r.url for r in results)
         
-        return context, urls
+        # Combine context and URLs into a single response
+        full_response = f"{context}\n\nSources:\n{urls}" if urls else context
+        
+        return [{"type": "text", "text": full_response}]
     
-    async def aexecute(self, query: str) -> Tuple[str, str]:
+    async def aexecute(self, query: str) -> List[Dict[str, Any]]:
         """
         Asynchronous execution of web search using search engines
         
@@ -75,20 +76,21 @@ class WebSearchTool(ITool):
             query: A standalone question containing all required context
             
         Returns:
-            Tuple[str, str]: Tuple containing:
-                - Retrieved relevant information from web search
-                - Retrieved URLs from web search which are used to cite the sources
+            List[Dict[str, Any]]: List of content objects in the format required by the LLM
         """
         if not self.search_client:
             logger.error("Cannot perform search: No search client available")
-            return "No search capability available. Please check configuration.", ""
+            return [{"type": "text", "text": "No search capability available. Please check configuration."}]
             
         results = await self.search_client.asearch(query)
         if not results:
-            return "No results found.", ""
+            return [{"type": "text", "text": "No results found."}]
             
         # Format results into context and URLs
         context = "\n\n".join(f"{r.title}\n{r.content}" for r in results if r.content)
         urls = "\n".join(r.url for r in results)
         
-        return context, urls
+        # Combine context and URLs into a single response
+        full_response = f"{context}\n\nSources:\n{urls}" if urls else context
+        
+        return [{"type": "text", "text": full_response}]
