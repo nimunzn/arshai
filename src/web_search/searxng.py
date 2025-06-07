@@ -29,7 +29,7 @@ class SearxNGClient(IWebSearchClient):
         """Initialize SearxNG client with configuration"""
         self.config = config
         # Get host from config or environment variable
-        host = config.host or os.environ.get("SEARX_INSTANCE")
+        host = os.getenv("SEARX_INSTANCE")
         if not host:
             raise ValueError("SearxNG instance URL not provided. Set it in config or SEARX_INSTANCE environment variable.")
         self.base_url = host.rstrip('/')
