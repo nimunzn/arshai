@@ -281,14 +281,7 @@ class Settings(ISetting):
         if not search_config:
             logger.warning("No search configuration found")
             return None
-            
-        # Create a configuration dictionary that includes searx_instance if needed
-        if isinstance(search_config, dict) and 'searx_instance' not in search_config:
-            # Try to get from web_search section
-            web_search = self.get("web_search", {})
-            if isinstance(web_search, dict) and 'searx_instance' in web_search:
-                search_config['searx_instance'] = web_search.get('searx_instance')
-        
+              
         # Get the provider from config, default to searxng
         provider = search_config.get("provider", "searxng")
             
