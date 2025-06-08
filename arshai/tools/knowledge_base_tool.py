@@ -2,6 +2,7 @@ from typing import Dict, Any, List, Optional
 from arshai.core.interfaces.itool import ITool
 from arshai.core.interfaces.isetting import ISetting
 import logging
+import traceback
 
 class KnowledgeBaseRetrievalTool(ITool):
     """Tool for retrieving knowledge from the vector database using both semantic and keyword-based search"""
@@ -96,6 +97,7 @@ class KnowledgeBaseRetrievalTool(ITool):
                     formatted_results.append(f"Source: {source}\nContent: {text}\n")
                 except Exception as e:
                     self.logger.error(f"Error processing hit: {str(e)}")
+                    self.logger.error(traceback.format_exc())
         
         if not formatted_results:
             return "No relevant information could be extracted from the search results."
@@ -143,6 +145,12 @@ class KnowledgeBaseRetrievalTool(ITool):
                 
         except Exception as e:
             self.logger.error(f"Error during vector search: {str(e)}")
+            self.logger.error(f"Query embeddings type: {type(query_embeddings)}")
+            if isinstance(query_embeddings, dict):
+                self.logger.error(f"Query embeddings keys: {list(query_embeddings.keys())}")
+            else:
+                self.logger.error(f"Query embeddings content: {query_embeddings}")
+            self.logger.error(traceback.format_exc())
             return [{"type": "text", "text": f"Error retrieving knowledge: {str(e)}"}]
 
     def execute(self, query: str) -> List[Dict[str, Any]]:
@@ -187,4 +195,10 @@ class KnowledgeBaseRetrievalTool(ITool):
                 
         except Exception as e:
             self.logger.error(f"Error during vector search: {str(e)}")
+            self.logger.error(f"Query embeddings type: {type(query_embeddings)}")
+            if isinstance(query_embeddings, dict):
+                self.logger.error(f"Query embeddings keys: {list(query_embeddings.keys())}")
+            else:
+                self.logger.error(f"Query embeddings content: {query_embeddings}")
+            self.logger.error(traceback.format_exc())
             return [{"type": "text", "text": f"Error retrieving knowledge: {str(e)}"}]

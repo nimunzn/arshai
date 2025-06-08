@@ -109,7 +109,7 @@ class VoyageAIEmbedding(IEmbedding):
                 output_dimension=self.dimension
             )
             
-            return result.embeddings[0]
+            return {"dense": result.embeddings[0]}
         except Exception as e:
             self.logger.error(f"Error generating embedding: {e}")
             raise
@@ -132,7 +132,7 @@ class VoyageAIEmbedding(IEmbedding):
                 output_dimension=self.dimension
             )
             
-            return result.embeddings
+            return {"dense": result.embeddings}
         except Exception as e:
             self.logger.error(f"Error generating embeddings: {e}")
             raise
