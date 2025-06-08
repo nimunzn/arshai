@@ -4,6 +4,7 @@ from arshai.core.interfaces.itool import ITool
 from arshai.core.interfaces.isetting import ISetting
 from arshai.core.interfaces.idocument import Document
 import logging
+import traceback
 
 class MultimodalKnowledgeBaseRetrievalTool(ITool):
     """Tool for retrieving knowledge from the vector database using both semantic and keyword-based search"""
@@ -95,6 +96,7 @@ class MultimodalKnowledgeBaseRetrievalTool(ITool):
                     ))
                 except Exception as e:
                     self.logger.error(f"Error processing hit for document conversion: {str(e)}")
+                    self.logger.error(traceback.format_exc())
         
         return documents
 
@@ -132,6 +134,7 @@ class MultimodalKnowledgeBaseRetrievalTool(ITool):
                 
             except Exception as e:
                 self.logger.error(f"Error formatting document: {str(e)}")
+                self.logger.error(traceback.format_exc())
         
         return formatted_results
 
@@ -169,6 +172,7 @@ class MultimodalKnowledgeBaseRetrievalTool(ITool):
         
         except Exception as e:
             self.logger.error(f"Error during vector search: {str(e)}")
+            self.logger.error(traceback.format_exc())
             return []
 
     def execute(self, query: str) -> Union[List[Dict[str, Any]]]:
@@ -203,4 +207,5 @@ class MultimodalKnowledgeBaseRetrievalTool(ITool):
                 
         except Exception as e:
             self.logger.error(f"Error during vector search: {str(e)}")
+            self.logger.error(traceback.format_exc())
             return []
