@@ -23,6 +23,7 @@ class MilvusClient(IVectorDBClient):
         self.host = os.getenv("MILVUS_HOST")
         self.port = os.getenv("MILVUS_PORT")
         self.db_name = os.getenv("MILVUS_DB_NAME")
+        self.batch_size = int(os.getenv("MILVUS_BATCH_SIZE", "50"))
         self.logger = logging.getLogger('MilvusClient')
     
     # ----------------------
@@ -256,13 +257,12 @@ class MilvusClient(IVectorDBClient):
             entities.append(entity)
         
         # Insert in batches
-        batch_size = self.config.batch_size  # Default to 50 if batch_size not in config
-        for i in range(0, len(entities), batch_size):
-            batch_end = min(i + batch_size, len(entities))
+        for i in range(0, len(entities), self.batch_size):
+            batch_end = min(i + self.batch_size, len(entities))
             current_batch = entities[i:batch_end]
             current_batch_size = len(current_batch)
             
-            self.logger.info(f"Inserting batch {i//batch_size + 1}, size: {current_batch_size}")
+            self.logger.info(f"Inserting batch {i//self.batch_size + 1}, size: {current_batch_size}")
             self.logger.info(f"First entity keys: {current_batch[0].keys() if current_batch else 'Empty batch'}")
             
             # Insert the batch
