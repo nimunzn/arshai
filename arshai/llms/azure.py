@@ -52,7 +52,7 @@ class AzureClient(ILLM):
             "parameters": structure_type.model_json_schema()
         }
     
-    def chat_with_tools(
+    async def chat_with_tools(
         self,
         input:ILLMInput
     ) ->  Union[ILLMOutput, str]:
@@ -132,7 +132,8 @@ class AzureClient(ILLM):
 
                     # Handle other tool functions
                     if function_name in input.callable_functions:
-                        function_response = input.callable_functions[function_name](**function_args)
+                        # Use aexecute for async tool execution
+                        function_response = await input.callable_functions[function_name](**function_args)
                         self.logger.debug(f"Function response: {function_response}")
                         
                         # Function responses are now in proper content format, use directly
@@ -388,7 +389,8 @@ class AzureClient(ILLM):
                                         if args_str.startswith("{") and args_str.endswith("}"):
                                             function_args = json.loads(collected_message["function_call"]["arguments"])
                                             if function_name in input.callable_functions:
-                                                function_response = input.callable_functions[function_name](**function_args)
+                                                # Use aexecute for async tool execution
+                                                function_response = await input.callable_functions[function_name](**function_args)
                                                 self.logger.debug(f"Function {function_name} response: {function_response}")
                                                 
                                                 # Function responses are now in proper content format, use directly

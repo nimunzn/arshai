@@ -47,7 +47,7 @@ class ConversationAgent(IAgent):
         Get implementations of all available functions from configured tools.
         """
         return {
-            tool.function_definition["name"]: tool.execute
+            tool.function_definition["name"]: tool.aexecute
             for tool in self.available_tools
         }
 
@@ -96,14 +96,14 @@ class ConversationAgent(IAgent):
         logger.info(f"Prompt prepared in {(datetime.now() - prompt_start).total_seconds()}s")
         return base_prompt
 
-    def _get_llm_response(self, system_prompt: str, user_message: str) -> Any:
+    async def _get_llm_response(self, system_prompt: str, user_message: str) -> Any:
         """Get response from LLM with tools"""
         llm_start = datetime.now()
 
         logger.debug(f"callable functions: {self._get_callable_functions()}")
         logger.debug(f"function description: {self._get_function_description()}")
 
-        llm_output = self.llm.chat_with_tools(
+        llm_output = await self.llm.chat_with_tools(
             input=ILLMInput(
                 llm_type=LLMInputType.CHAT_WITH_TOOLS,
                 system_prompt=system_prompt,
@@ -195,7 +195,7 @@ class ConversationAgent(IAgent):
                 delattr(self, '_current_context')
             raise
 
-    def process_message(
+    async def process_message(
             self,
             input: IAgentInput,
     ) -> Tuple[IAgentOutput, str]:
@@ -223,7 +223,7 @@ class ConversationAgent(IAgent):
             system_prompt = self._prepare_system_prompt(working_memory=working_memory)
 
             # Get LLM response
-            llm_response, llm_usage = self._get_llm_response(system_prompt, input.message)
+            llm_response, llm_usage = await self._get_llm_response(system_prompt, input.message)
 
             # Extract context and response
             updated_working_memory = llm_response.memory

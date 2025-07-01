@@ -26,13 +26,10 @@ class KnowledgeBaseRetrievalTool(ITool):
         # Check if components are available
         if self.vector_db is None:
             self.logger.error("Vector database client not available")
-            return False
         if self.embedding_model is None:
             self.logger.error("Embedding model not available")
-            return False
         if self.collection_config is None:
             self.logger.error("Collection configuration not available")
-            return False
             
 
     @property
