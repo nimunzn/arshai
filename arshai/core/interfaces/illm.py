@@ -122,7 +122,7 @@ class ILLM(Protocol):
         """Parse response content into the specified structure type"""
         ...
     
-    def chat_with_tools(
+    async def chat_with_tools(
         self,
         input:ILLMInput) -> Union[ILLMOutput, str]: ...
     

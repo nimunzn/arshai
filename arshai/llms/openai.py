@@ -89,7 +89,7 @@ class OpenAIClient(ILLM):
             self.logger.info("Json str is not complete")
             return False, fixed_json  # More closing than opening braces - invalid JSON
     
-    def chat_with_tools(
+    async def chat_with_tools(
         self,
         input:ILLMInput
     ) -> Union[ILLMOutput, str]:
@@ -185,7 +185,8 @@ class OpenAIClient(ILLM):
 
                             # Handle other tool functions
                             if function_name in input.callable_functions:
-                                function_response = input.callable_functions[function_name](**function_args)
+                                # Use aexecute for async tool execution
+                                function_response = await input.callable_functions[function_name](**function_args)
                                 self.logger.debug(f"Function response: {function_response}")
                                 messages.append({
                                     "role": "tool",
@@ -472,7 +473,8 @@ class OpenAIClient(ILLM):
                                         try:
                                             function_args = json.loads(args_str)
                                             if function_name in input.callable_functions:
-                                                function_response = input.callable_functions[function_name](**function_args)
+                                                # Use aexecute for async tool execution
+                                                function_response = await input.callable_functions[function_name](**function_args)
                                                 self.logger.info(f"Function {function_name} response: {function_response}")
                                                 # Add function response to messages
                                             messages.extend([

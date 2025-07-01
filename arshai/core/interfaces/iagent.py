@@ -63,22 +63,22 @@ class IAgent(Protocol):
         """Initialize the agent with the given configuration"""
         ...
     
-    def aprocess_message(
+    async def aprocess_message(
             self,
             input: IAgentInput,
             stream: bool = False,
     ) -> Tuple[IAgentOutput, str]:
         """
-        Process incoming message and generate response.
+        Process incoming message and generate response asynchronously.
         """
         ...
 
-    def process_message(
+    async def process_message(
             self,
             input: IAgentInput,
     ) -> Tuple[IAgentOutput, str]:
         """
-        Process incoming message and generate response.
+        Process incoming message and generate response asynchronously.
 
         Args:
             input: IAgentInput containing message, context and available functions
@@ -107,9 +107,9 @@ class IAgent(Protocol):
         """
         ...
 
-    def _get_llm_response(self, system_prompt: str, user_message: str) -> Any:
+    async def _get_llm_response(self, system_prompt: str, user_message: str) -> Any:
         """
-        Get response from LLM with tools
+        Get response from LLM with tools asynchronously
         
         Args:
             system_prompt: The prepared system prompt
