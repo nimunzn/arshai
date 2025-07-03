@@ -133,12 +133,12 @@ class AzureClient(ILLM):
                     # Handle other tool functions
                     if function_name in input.callable_functions:
                         # Use aexecute for async tool execution
-                        function_response = await input.callable_functions[function_name](**function_args)
+                        role, function_response = await input.callable_functions[function_name](**function_args)
                         self.logger.debug(f"Function response: {function_response}")
                         
                         # Function responses are now in proper content format, use directly
                         messages.append({
-                            "role": "function",
+                            "role": role,
                             "name": function_name,
                             "content": function_response
                         })
@@ -390,12 +390,12 @@ class AzureClient(ILLM):
                                             function_args = json.loads(collected_message["function_call"]["arguments"])
                                             if function_name in input.callable_functions:
                                                 # Use aexecute for async tool execution
-                                                function_response = await input.callable_functions[function_name](**function_args)
+                                                role, function_response = await input.callable_functions[function_name](**function_args)
                                                 self.logger.debug(f"Function {function_name} response: {function_response}")
                                                 
                                                 # Function responses are now in proper content format, use directly
                                                 messages.append({
-                                                    "role": "function",
+                                                    "role": role,
                                                      "name": function_name,
                                                     "content": function_response
                                                 })

@@ -186,10 +186,10 @@ class OpenAIClient(ILLM):
                             # Handle other tool functions
                             if function_name in input.callable_functions:
                                 # Use aexecute for async tool execution
-                                function_response = await input.callable_functions[function_name](**function_args)
+                                role, function_response = await input.callable_functions[function_name](**function_args)
                                 self.logger.debug(f"Function response: {function_response}")
                                 messages.append({
-                                    "role": "tool",
+                                    "role": role,
                                     "tool_call_id": tool_call.id,
                                     "name": function_name,
                                     "content": str(function_response)
@@ -474,11 +474,11 @@ class OpenAIClient(ILLM):
                                             function_args = json.loads(args_str)
                                             if function_name in input.callable_functions:
                                                 # Use aexecute for async tool execution
-                                                function_response = await input.callable_functions[function_name](**function_args)
+                                                role, function_response = await input.callable_functions[function_name](**function_args)
                                                 self.logger.info(f"Function {function_name} response: {function_response}")
                                                 # Add function response to messages
                                             messages.extend([
-                                                {"role": "tool", "tool_call_id": current_tool_call["id"], "name": function_name, "content": str(function_response)},
+                                                {"role": role, "tool_call_id": current_tool_call["id"], "name": function_name, "content": str(function_response)},
                                                 {"role": "system", "content": f"You MUST NOT use and call the {function_name} tool AGAIN as it has already been used"}
                                             ])
                                             current_turn += 1
