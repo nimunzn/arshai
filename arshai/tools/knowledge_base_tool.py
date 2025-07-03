@@ -136,9 +136,9 @@ class KnowledgeBaseRetrievalTool(ITool):
             # Format the search results
             if search_results and len(search_results) > 0:
                 formatted_text = self._format_search_results(search_results)
-                return [{"type": "text", "text": formatted_text}]
+                return "function", [{"type": "text", "text": formatted_text}]
             else:
-                return [{"type": "text", "text": "No relevant information found."}]
+                return "function", [{"type": "text", "text": "No relevant information found."}]
                 
         except Exception as e:
             self.logger.error(f"Error during vector search: {str(e)}")
@@ -148,7 +148,7 @@ class KnowledgeBaseRetrievalTool(ITool):
             else:
                 self.logger.error(f"Query embeddings content: {query_embeddings}")
             self.logger.error(traceback.format_exc())
-            return [{"type": "text", "text": f"Error retrieving knowledge: {str(e)}"}]
+            return "function", [{"type": "text", "text": f"Error retrieving knowledge: {str(e)}"}]
 
     def execute(self, query: str) -> List[Dict[str, Any]]:
         """
@@ -186,9 +186,9 @@ class KnowledgeBaseRetrievalTool(ITool):
             if search_results and len(search_results) > 0:
                 self.logger.info(f"search_results: {len(search_results)}")
                 formatted_text = self._format_search_results(search_results)
-                return [{"type": "text", "text": formatted_text}]
+                return "function", [{"type": "text", "text": formatted_text}]
             else:
-                return [{"type": "text", "text": "No relevant information found."}]
+                return "function", [{"type": "text", "text": "No relevant information found."}]
                 
         except Exception as e:
             self.logger.error(f"Error during vector search: {str(e)}")
@@ -198,4 +198,4 @@ class KnowledgeBaseRetrievalTool(ITool):
             else:
                 self.logger.error(f"Query embeddings content: {query_embeddings}")
             self.logger.error(traceback.format_exc())
-            return [{"type": "text", "text": f"Error retrieving knowledge: {str(e)}"}]
+            return "function", [{"type": "text", "text": f"Error retrieving knowledge: {str(e)}"}]

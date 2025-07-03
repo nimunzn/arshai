@@ -121,26 +121,26 @@ class MCPDynamicTool(ITool):
                 if thread.is_alive():
                     error_msg = f"Tool '{self.name}' on server '{self.server_name}' timed out after 60 seconds"
                     logger.error(error_msg)
-                    return [{"type": "text", "text": error_msg}]
+                    return "function", [{"type": "text", "text": error_msg}]
                 
                 if not result_holder['completed']:
                     error_msg = f"Tool '{self.name}' on server '{self.server_name}' did not complete properly"
                     logger.error(error_msg)
-                    return [{"type": "text", "text": error_msg}]
+                    return "function", [{"type": "text", "text": error_msg}]
                 
                 if result_holder['exception']:
                     raise result_holder['exception']
                 
-                return result_holder['result']
+                return "function", result_holder['result']
                     
             except RuntimeError:
                 # No event loop running, safe to use asyncio.run()
-                return asyncio.run(self._execute_async(**kwargs))
+                return "function", asyncio.run(self._execute_async(**kwargs))
                 
         except Exception as e:
             error_msg = f"Error executing MCP tool '{self.name}' on server '{self.server_name}': {e}"
             logger.error(error_msg)
-            return [{"type": "text", "text": error_msg}]
+            return "function", [{"type": "text", "text": error_msg}]
     
     async def aexecute(self, **kwargs) -> Any:
         """
@@ -157,7 +157,7 @@ class MCPDynamicTool(ITool):
         except Exception as e:
             error_msg = f"Error executing MCP tool '{self.name}' on server '{self.server_name}': {e}"
             logger.error(error_msg)
-            return [{"type": "text", "text": error_msg}]
+            return "function", [{"type": "text", "text": error_msg}]
     
     async def _execute_async(self, **kwargs) -> Any:
         """

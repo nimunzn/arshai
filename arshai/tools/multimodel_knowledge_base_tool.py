@@ -166,14 +166,14 @@ class MultimodalKnowledgeBaseRetrievalTool(ITool):
             # Convert search results to documents and then to list format
             if search_results and len(search_results) > 0:
                 documents = self._search_results_to_documents(search_results)
-                return self._format_image_results(documents)
+                return "assistant", self._format_image_results(documents)
             else:
-                return []
+                return "assistant", []
         
         except Exception as e:
             self.logger.error(f"Error during vector search: {str(e)}")
             self.logger.error(traceback.format_exc())
-            return []
+            return "assistant", []
 
     def execute(self, query: str) -> Union[List[Dict[str, Any]]]:
         """
@@ -201,11 +201,11 @@ class MultimodalKnowledgeBaseRetrievalTool(ITool):
             # Convert search results to documents and then to list format
             if search_results and len(search_results) > 0:
                 documents = self._search_results_to_documents(search_results)
-                return self._format_image_results(documents)
+                return "assistant", self._format_image_results(documents)
             else:
-                return []
+                return "assistant", []
                 
         except Exception as e:
             self.logger.error(f"Error during vector search: {str(e)}")
             self.logger.error(traceback.format_exc())
-            return []
+            return "assistant", []

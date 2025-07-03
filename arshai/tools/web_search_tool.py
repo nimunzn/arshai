@@ -53,11 +53,11 @@ class WebSearchTool(ITool):
         """
         if not self.search_client:
             logger.error("Cannot perform search: No search client available")
-            return [{"type": "text", "text": "No search capability available. Please check configuration."}]
+            return "function", [{"type": "text", "text": "No search capability available. Please check configuration."}]
             
         results = self.search_client.search(query)
         if not results:
-            return [{"type": "text", "text": "No results found."}]
+            return "function", [{"type": "text", "text": "No results found."}]
             
         # Format results into context and URLs
         context = "\n\n".join(f"{r.title}\n{r.content}" for r in results if r.content)
@@ -66,7 +66,7 @@ class WebSearchTool(ITool):
         # Combine context and URLs into a single response
         full_response = f"{context}\n\nSources:\n{urls}" if urls else context
         
-        return [{"type": "text", "text": full_response}]
+        return "function", [{"type": "text", "text": full_response}]
     
     async def aexecute(self, query: str) -> List[Dict[str, Any]]:
         """
@@ -80,11 +80,11 @@ class WebSearchTool(ITool):
         """
         if not self.search_client:
             logger.error("Cannot perform search: No search client available")
-            return [{"type": "text", "text": "No search capability available. Please check configuration."}]
+            return "function", [{"type": "text", "text": "No search capability available. Please check configuration."}]
             
         results = await self.search_client.asearch(query)
         if not results:
-            return [{"type": "text", "text": "No results found."}]
+            return "function", [{"type": "text", "text": "No results found."}]
             
         # Format results into context and URLs
         context = "\n\n".join(f"{r.title}\n{r.content}" for r in results if r.content)
@@ -93,4 +93,4 @@ class WebSearchTool(ITool):
         # Combine context and URLs into a single response
         full_response = f"{context}\n\nSources:\n{urls}" if urls else context
         
-        return [{"type": "text", "text": full_response}]
+        return "function", [{"type": "text", "text": full_response}]
