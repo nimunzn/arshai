@@ -75,7 +75,7 @@ class KnowledgeBaseRetrievalTool(ITool):
             for hit in hits:
                 try:
                     # Extract information from the hit
-                    self.logger.info(f"Processing hit with ID: {hit.id}, distance: {hit.distance}")
+                    self.logger.debug(f"Processing hit with ID: {hit.id}, distance: {hit.distance}")
                     
                     # Extract text content - directly access the field value using hit.get()
                     text = hit.get(self.collection_config.text_field)
