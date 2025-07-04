@@ -153,7 +153,7 @@ class MultimodalKnowledgeBaseRetrievalTool(ITool):
             # Generate embeddings for the query
             query_embeddings = self.embedding_model.multimodel_embed(input=[query])
 
-            self.logger.info(f"query_embeddings: {query_embeddings}")
+            self.logger.debug(f"query_embeddings: {query_embeddings}")
             # Use dense vector search only
             search_results = self.vector_db.search_by_vector(
                 config=self.collection_config,
@@ -161,7 +161,7 @@ class MultimodalKnowledgeBaseRetrievalTool(ITool):
                 limit=self.search_limit,
                 output_fields = [self.collection_config.text_field, self.collection_config.metadata_field]
             )
-            self.logger.info(f"search_results: {search_results}")
+            self.logger.debug(f"search_results: {search_results}")
 
             # Convert search results to documents and then to list format
             if search_results and len(search_results) > 0:

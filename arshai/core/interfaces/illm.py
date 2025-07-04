@@ -32,7 +32,7 @@ class ILLMInput(IDTO):
     tools_list: List[Dict] = Field(default=[], description="list of defined tools for llm")
     callable_functions: Dict[str, Callable] = Field(default={}, description="list of callable tools for this message")
     structure_type: Type[T] = Field(default=None, description="Output response")
-    max_turns: int = Field(default=3, description="Times that llm can call tools")
+    max_turns: int = Field(default=10, description="Times that llm can call tools")
 
     @model_validator(mode='before')
     @classmethod
