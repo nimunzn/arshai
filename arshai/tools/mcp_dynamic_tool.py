@@ -153,7 +153,7 @@ class MCPDynamicTool(ITool):
             Tool execution result formatted for LLM consumption
         """
         try:
-            return await self._execute_async(**kwargs)
+            return "function", await self._execute_async(**kwargs)
         except Exception as e:
             error_msg = f"Error executing MCP tool '{self.name}' on server '{self.server_name}': {e}"
             logger.error(error_msg)
