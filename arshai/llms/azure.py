@@ -142,12 +142,6 @@ class AzureClient(ILLM):
                             "name": function_name,
                             "content": function_response
                         })
-                        
-                        # System messages use array content format
-                        messages.append({
-                            "role": "system",
-                            "content": [{"type": "text", "text": f"You MUST NOT use and call the {function_name} tool AGAIN as it has already been used"}]
-                        })
                     else:
                         raise ValueError(f"Function {function_name} not found in available functions")
                 
@@ -333,9 +327,14 @@ class AzureClient(ILLM):
 
                     # Check if all attributes are None, excluding private/special attributes
                     if all(getattr(delta, attr) is None for attr in vars(delta) if not attr.startswith('_')):
-                        self.logger.info(f"All attributes are None, excluding private/special attributes")
                         if has_previous_delta:
-                            is_finished = True
+                            # Only finish if we're not expecting more tool calls
+                            # Continue processing if we have partial function calls or if streaming just started
+                            if collected_message.get("function_call") is None and collected_message.get("content", "").strip():
+                                is_finished = True
+                            else:
+                                # We might be in a function call sequence or still building content
+                                has_previous_delta = True
                         else:
                             has_previous_delta = True
 
@@ -400,14 +399,10 @@ class AzureClient(ILLM):
                                                     "content": function_response
                                                 })
                                                 
-                                                # System messages use array content format
-                                                messages.append({
-                                                    "role": "system",
-                                                    "content": [{"type": "text", "text": f"You MUST NOT use and call the {function_name} tool AGAIN as it has already been used"}]
-                                                })
-                                                
+                                                # Reset collected message for next turn
+                                                collected_message = {"content": "", "function_call": None}
                                                 current_turn += 1
-                                                continue
+                                                break  # Break out of the streaming loop to start a new turn
 
             yield {"llm_response": None, "usage": accumulated_usage}
 

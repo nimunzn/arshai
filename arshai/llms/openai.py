@@ -2,6 +2,7 @@ from openai import OpenAI
 import json
 import os
 import logging
+import traceback
 from typing import List, Dict, Callable, Any, Optional, TypeVar, Type, Union, Generic, AsyncGenerator
 from arshai.core.interfaces.illm import ILLM, ILLMConfig, ILLMInput, ILLMOutput
 from datetime import datetime
@@ -121,29 +122,29 @@ class OpenAIClient(ILLM):
         else:
             all_tools = input.tools_list
             response_format = None
-            
-            current_turn = 0
-            final_response = None
-            
-            # Track accumulated usage metrics
-            accumulated_usage = None
-            
-            while current_turn < input.max_turns:
-                self.logger.info(f"Current turn: {current_turn}")
-                try:
-                    response = self._client.chat.completions.create(
+        
+        current_turn = 0
+        final_response = None
+        
+        # Track accumulated usage metrics
+        accumulated_usage = None
+        
+        while current_turn < input.max_turns:
+            self.logger.info(f"Current turn: {current_turn}")
+            try:
+                response = self._client.chat.completions.create(
                         model=self.config.model,
                         messages=messages,
-                        tools=all_tools,
+                        tools=[{"type": "function", "function": tool} for tool in all_tools],
                         tool_choice="auto",
                         temperature=self.config.temperature,
-                    max_tokens=self.config.max_tokens if self.config.max_tokens else None,
+                        max_tokens=self.config.max_tokens if self.config.max_tokens else None,
                         response_format=response_format
                     )
-                    
-                    # Accumulate usage info
-                    if hasattr(response, 'usage'):
-                        current_usage = response.usage
+                
+                # Accumulate usage info
+                if hasattr(response, 'usage'):
+                    current_usage = response.usage
                     self.logger.info(f"Current usage: {current_usage}")
                     if accumulated_usage is None:
                         accumulated_usage = current_usage
@@ -152,70 +153,61 @@ class OpenAIClient(ILLM):
                         accumulated_usage.prompt_tokens += current_usage.prompt_tokens
                         accumulated_usage.completion_tokens += current_usage.completion_tokens
                         accumulated_usage.total_tokens += current_usage.total_tokens
-                    
-                    message = response.choices[0].message
+                
+                message = response.choices[0].message
 
-                    self.logger.info(f"Message received")
-                    
-                    # If no tool call and no structure type required, return content
-                    if not message.tool_calls and message.content:
-                        if not input.structure_type: 
-                            return {"llm_response": message.content, "usage": accumulated_usage}
-                        else:
-                            try:
-                                structure_response = json.loads(message.content)
-                                final_response = input.structure_type(**structure_response)
-                                break
-                            except (json.JSONDecodeError, TypeError, ValueError) as e:
-                                self.logger.error(f"Error parsing structure response: {e}")
-                            return {"llm_response": f"Error parsing structured response: {str(e)}", "usage": accumulated_usage}
-                    
-                    # Handle tool calls
-                    if message.tool_calls:
-                        for tool_call in message.tool_calls:
-                            function_name = tool_call.function.name
-                        try:
-                            function_args = json.loads(tool_call.function.arguments)
-                            self.logger.info(f"Function name: {function_name}")
+                self.logger.info(f"Message: {message}")
+                
+                # If no tool call and no structure type required, return content
+                if not message.tool_calls and message.content:
+                    if not input.structure_type: 
+                        return {"llm_response": message.content, "usage": accumulated_usage}
+                    else:
+                        structure_response = json.loads(message.content)
+                        final_response = input.structure_type(**structure_response)
+                        break
+                
+                # Handle tool calls
+                if message.tool_calls:
+                    for tool_call in message.tool_calls:
+                        function_name = tool_call.function.name
+                        function_args = json.loads(tool_call.function.arguments)
+                        self.logger.info(f"Function name: {function_name}")
+                        # If it's the structure function, validate and create the structured response
+                        
+                        if input.structure_type and function_name == input.structure_type.__name__.lower():
+                            final_response = input.structure_type(**function_args)
+                            break
+
+                        # Handle other tool functions
+                        if function_name in input.callable_functions:
+                            # Use aexecute for async tool execution
+                            role, function_response = await input.callable_functions[function_name](**function_args)
+                            self.logger.debug(f"Function response: {function_response}")
                             
-                            # If it's the structure function, validate and create the structured response
-                            if input.structure_type and function_name == input.structure_type.__name__.lower():
-                                final_response = input.structure_type(**function_args)
-                                break
-
-                            # Handle other tool functions
-                            if function_name in input.callable_functions:
-                                # Use aexecute for async tool execution
-                                role, function_response = await input.callable_functions[function_name](**function_args)
-                                self.logger.debug(f"Function response: {function_response}")
-                                messages.append({
-                                    "role": role,
-                                    "tool_call_id": tool_call.id,
-                                    "name": function_name,
-                                    "content": str(function_response)
-                                })
-                                messages.append({"role": "system", "content": f"You MUST NOT use and call the {function_name} tool AGAIN as it has already been used"})
-                            else:
-                                raise ValueError(f"Function {function_name} not found in available functions")
-                        except json.JSONDecodeError as e:
-                            self.logger.error(f"Error parsing tool arguments: {e}")
-                            return {"llm_response": f"Error parsing tool arguments: {str(e)}", "usage": accumulated_usage}
-                    
-                    # Add assistant's message to conversation
-                    if message.content:
-                        messages.append({"role": "assistant", "content": message.content})
-                    
-                    current_turn += 1
-                    
-                except Exception as e:
-                    import traceback
-                    self.logger.error(f"Error in chat_with_tools: {str(e)}")
-                    self.logger.error(traceback.format_exc())
-                    return {"llm_response": f"An error occurred: {str(e)}", "usage": None}
-            
-            if final_response is None:
-                if input.structure_type:
-                    try:
+                            messages.append({
+                                "role": role,
+                                "tool_call_id": tool_call.id,
+                                "name": function_name,
+                                "content": str(function_response)
+                            })
+                        else:
+                            raise ValueError(f"Function {function_name} not found in available functions")
+                
+                # Add assistant's message to conversation
+                if message.content:
+                    messages.append({"role": "assistant", "content": message.content})
+                
+                current_turn += 1
+                
+            except Exception as e:
+                self.logger.error(f"Error in chat_with_tools: {str(e)}")
+                self.logger.error(traceback.format_exc())
+                return {"llm_response": f"An error occurred: {str(e)}", "usage": None}
+        
+        if final_response is None:
+            if input.structure_type:
+                try:
                         # Make one final attempt to get structured response
                         final_message = {
                             "role": "system",
@@ -249,13 +241,13 @@ class OpenAIClient(ILLM):
                             final_response = input.structure_type(**function_args)
                         else:
                             return {"llm_response": "Failed to generate structured response", "usage": accumulated_usage}
-                    except Exception as e:
-                        return {"llm_response": f"Failed to generate structured response: {str(e)}", "usage": None}
-                else:
-                    return {"llm_response": "Maximum number of function calling turns reached", "usage": accumulated_usage}
-            
-            # Return structured response with usage
-            return {"llm_response": final_response, "usage": accumulated_usage}
+                except Exception as e:
+                    return {"llm_response": f"Failed to generate structured response: {str(e)}", "usage": None}
+            else:
+                return {"llm_response": "Maximum number of function calling turns reached", "usage": accumulated_usage}
+        
+        # Return structured response with usage
+        return {"llm_response": final_response, "usage": accumulated_usage}
     
     def chat_completion(
         self,

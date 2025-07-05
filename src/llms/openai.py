@@ -194,7 +194,6 @@ class OpenAIClient(ILLM):
                                     "name": function_name,
                                     "content": str(function_response)
                                 })
-                                messages.append({"role": "system", "content": f"You MUST NOT use and call the {function_name} tool AGAIN as it has already been used"})
                             else:
                                 raise ValueError(f"Function {function_name} not found in available functions")
                         except json.JSONDecodeError as e:
