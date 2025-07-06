@@ -382,6 +382,13 @@ class OpenAIClient(ILLM):
                         accumulated_usage.prompt_tokens += chunk.usage.prompt_tokens
                         accumulated_usage.completion_tokens += chunk.usage.completion_tokens
                         accumulated_usage.total_tokens += chunk.usage.total_tokens
+                # Check if we have a complete structured response and this is the end of streaming
+                if (input.structure_type and 
+                    collected_message.get("tool_calls") and 
+                    len(collected_message["tool_calls"]) > 0 and
+                    collected_message["tool_calls"][0]["function"]["name"] == input.structure_type.__name__.lower()):
+                    # We have completed a structured response - end the conversation
+                    is_finished = True
                 
                 # Skip chunks without choices
                 if not chunk.choices:
