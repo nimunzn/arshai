@@ -36,30 +36,28 @@ class WorkflowConfig(IWorkflowConfig):
         self.edges: Dict[str, str] = {}
     
     def create_workflow(self) -> IWorkflowOrchestrator:
-        """Create and configure the workflow orchestrator.
+        """Create the workflow orchestrator (without configuration).
         
         This method:
         1. Creates a new workflow orchestrator
-        2. Configures it with nodes, edges, and entry points
-        3. Returns the configured orchestrator
+        2. Returns the unconfigured orchestrator
+        
+        Note: Call _configure_workflow(workflow) separately to configure it
         
         Returns:
-            Configured workflow orchestrator ready for execution
+            Unconfigured workflow orchestrator
         """
         self._logger.debug("Creating workflow orchestrator")
         
         # Create the workflow orchestrator
         workflow = BaseWorkflowOrchestrator(debug_mode=self.debug_mode)
         
-        # Configure it with nodes, edges, and entry points
-        self._configure_workflow(workflow)
-        
         return workflow
     
     def _configure_workflow(self, workflow: IWorkflowOrchestrator) -> None:
-        """Configure the workflow with nodes, edges, and entry points.
+        """Configure the workflow with nodes, edges, and entry points (sync).
         
-        This method must be implemented by subclasses to define:
+        This method can be implemented by subclasses for sync configuration:
         1. What nodes the workflow contains
         2. How nodes are connected with edges
         3. Entry points and routing logic
@@ -67,8 +65,22 @@ class WorkflowConfig(IWorkflowConfig):
         Args:
             workflow: The workflow orchestrator to configure
         """
-        # This method should be overridden by subclasses
-        raise NotImplementedError("Subclasses must implement _configure_workflow")
+        # Default implementation - subclasses can override for sync configuration
+        raise NotImplementedError("Subclasses must implement _configure_workflow or _configure_workflow_async")
+    
+    async def _configure_workflow_async(self, workflow: IWorkflowOrchestrator) -> None:
+        """Configure the workflow with nodes, edges, and entry points (async).
+        
+        This method can be implemented by subclasses for async configuration:
+        1. What nodes the workflow contains (async)
+        2. How nodes are connected with edges
+        3. Entry points and routing logic
+        
+        Args:
+            workflow: The workflow orchestrator to configure
+        """
+        # Default implementation - subclasses can override for async configuration
+        raise NotImplementedError("Subclasses must implement _configure_workflow or _configure_workflow_async")
     
     def _route_input(self, input_data: Dict[str, Any]) -> str:
         """Route to appropriate entry node based on input.

@@ -183,7 +183,11 @@ class IWorkflowConfig(Protocol):
         ...
     
     def _configure_workflow(self, workflow: IWorkflowOrchestrator) -> None:
-        """Configure the workflow with nodes, edges, and entry points."""
+        """Configure the workflow with nodes, edges, and entry points (sync)."""
+        ...
+    
+    async def _configure_workflow_async(self, workflow: IWorkflowOrchestrator) -> None:
+        """Configure the workflow with nodes, edges, and entry points (async)."""
         ...
     
     def _route_input(self, input_data: Dict[str, Any]) -> str:
