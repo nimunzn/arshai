@@ -318,7 +318,13 @@ class AzureClient(ILLM):
                     # Handle the case where choices is empty but usage data is present (final usage chunk)
                     if not chunk.choices and chunk.usage is not None:
                         self.logger.info(f"Received final usage data: {chunk.usage}")
-                        accumulated_usage = chunk.usage                
+                        accumulated_usage = chunk.usage
+                        # Check if we have a complete structured response and this is the end of streaming
+                    if (input.structure_type and 
+                        collected_message.get("function_call") and 
+                        collected_message["function_call"].get("name") == input.structure_type.__name__.lower()):
+                        # We have completed a structured response - end the conversation
+                        is_finished = True                
                     # Skip chunks without choices
                     if not chunk.choices:
                         continue
