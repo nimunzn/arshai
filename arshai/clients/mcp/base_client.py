@@ -59,7 +59,10 @@ class BaseMCPClient:
             # Create HTTP connection
             self._http_context = streamablehttp_client(
                 url=self.server_config.url,
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream"
+                },
                 timeout=timedelta(seconds=self.server_config.timeout),
             )
             
