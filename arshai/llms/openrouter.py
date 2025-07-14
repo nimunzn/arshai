@@ -378,7 +378,7 @@ class OpenRouterClient(ILLM):
             for chunk in self._client.chat.completions.create(
                 model=self.config.model,
                 messages=messages,
-                tools=all_tools,
+                tools=[{"type": "function", "function": tool} for tool in all_tools],
                 tool_choice="auto",
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens if self.config.max_tokens else None,
