@@ -8,6 +8,7 @@ from arshai.core.interfaces import ILLM, ILLMConfig
 from arshai.factories.llm_factory import LLMFactory
 from arshai.llms.openai import OpenAIClient
 from arshai.llms.azure import AzureClient
+from arshai.llms.openrouter import OpenRouterClient
 
 
 class TestLLMFactory:
@@ -57,6 +58,42 @@ class TestLLMFactory:
             assert llm.azure_deployment == "gpt-4o"
             assert llm.api_version == "2024-08-01-preview"
     
+    @patch.dict('os.environ', {'OPENROUTER_API_KEY': 'fake-openrouter-api-key'})
+    def test_create_openrouter_llm(self, llm_config):
+        """Test creating an OpenRouter LLM client."""
+        # Setup mocks
+        with patch.object(OpenRouterClient, '__init__', return_value=None) as mock_init, \
+             patch.object(OpenRouterClient, '_initialize_client', return_value=MagicMock()):
+            
+            # Create LLM
+            llm = LLMFactory.create("openrouter", llm_config)
+            
+            # Verify it's the right type
+            assert isinstance(llm, OpenRouterClient)
+            
+            # Verify initialization was called with config
+            mock_init.assert_called_once_with(llm_config)
+    
+    @patch.dict('os.environ', {
+        'OPENROUTER_API_KEY': 'fake-openrouter-api-key',
+        'OPENROUTER_SITE_URL': 'https://example.com',
+        'OPENROUTER_APP_NAME': 'TestApp'
+    })
+    def test_create_openrouter_llm_with_headers(self, llm_config):
+        """Test creating an OpenRouter LLM client with custom headers."""
+        # Setup mocks
+        with patch.object(OpenRouterClient, '__init__', return_value=None) as mock_init, \
+             patch.object(OpenRouterClient, '_initialize_client', return_value=MagicMock()):
+            
+            # Create LLM
+            llm = LLMFactory.create("openrouter", llm_config)
+            
+            # Verify it's the right type
+            assert isinstance(llm, OpenRouterClient)
+            
+            # Verify initialization was called with config
+            mock_init.assert_called_once_with(llm_config)
+    
     def test_create_unknown_provider(self, llm_config):
         """Test that creating an unknown provider raises an error."""
         with pytest.raises(ValueError) as excinfo:
@@ -71,4 +108,13 @@ class TestLLMFactory:
                 # Azure requires AZURE_DEPLOYMENT environment variable
                 LLMFactory.create("azure", llm_config)
             
-            assert "Azure deployment is required" in str(excinfo.value) 
+            assert "Azure deployment is required" in str(excinfo.value)
+    
+    def test_create_openrouter_missing_api_key(self, llm_config):
+        """Test that missing OpenRouter API key raises an error."""
+        with patch.dict('os.environ', {}, clear=True):
+            with pytest.raises(ValueError) as excinfo:
+                # OpenRouter requires OPENROUTER_API_KEY environment variable
+                LLMFactory.create("openrouter", llm_config)
+            
+            assert "OpenRouter API key not found" in str(excinfo.value) 

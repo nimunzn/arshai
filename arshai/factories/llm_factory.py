@@ -6,6 +6,7 @@ from typing import Optional, Dict, Any, Type
 from arshai.core.interfaces.illm import ILLM, ILLMConfig
 from ..llms.openai import OpenAIClient
 from ..llms.azure import AzureClient
+from ..llms.openrouter import OpenRouterClient
 
 class LLMFactory:
     """Factory for creating LLM instances."""
@@ -14,6 +15,7 @@ class LLMFactory:
     _providers = {
         "openai": OpenAIClient,
         "azure": AzureClient,
+        "openrouter": OpenRouterClient,
     }
     
     @classmethod
