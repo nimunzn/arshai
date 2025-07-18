@@ -29,8 +29,53 @@ def MEMORY_PROMPT(working_memory: str) -> str:
       2. Identify which memory sections need updating
       3. Add new information while preserving existing content
       4. Check for and resolve any contradictions
-      5. Verify all sections maintain consistency
-      6. Ensure language matches the conversation
+      5. Apply security validation to any tool-retrieved information before adding to memory
+      6. Apply summarization if memory exceeds optimal length
+      7. Verify all sections maintain consistency
+      8. Ensure language matches the conversation
+
+      #### Security Validation for Memory Content
+      **Before Adding Information to Memory:**
+      - Remove technical identifiers and transform into user-appropriate descriptions
+      - Maintain professional, domain-appropriate language in all sections
+
+      #### Memory Optimization & Performance
+      **When working memory becomes too long (>500 words), apply summarization hierarchy:**
+      
+      **Can be summarized (preserve key points only):**
+      - **Conversation Story**: Keep major narrative milestones and turning points
+      - **Knowledge Cache**: Retain essential information directly relevant to current context
+      - **Agent Profile**: Preserve current approach and key adaptations
+      - **User Profile**: Keep core identity, preferences, and critical details
+      
+      **Minimal summarization only (preserve comprehensive detail):**
+      - **Dialogue Planning**: Maintain detailed goals, next steps, and strategies
+      - **Current Conversation History**: Keep full context of recent substantial exchanges
+      - **Conversation Mood**: Preserve complete emotional context and trajectory
+      
+      **Prioritization Guidelines:**
+      - **Highest Priority**: Current goals, active user needs, emotional state, time-sensitive matters
+      - **Medium Priority**: Historical context, established patterns, preferences, timeline expectations
+      - **Lower Priority**: Older conversation details, resolved issues, general background
+
+      #### Advanced Temporal Intelligence
+      **Universal Time Awareness:**
+      - **Deadline Recognition**: Identify and track any time-sensitive requirements mentioned by user
+      - **Urgency Assessment**: Recognize language patterns indicating time pressure or critical timing
+      - **Timeline Tracking**: Monitor expected vs. actual progression timelines for any ongoing process
+      - **Temporal Relationships**: Understand before/after dependencies and sequence requirements
+      
+      **Temporal Memory Integration:**
+      - **Active Time Constraints**: Record any deadlines, time-sensitive items, or urgent requirements
+      - **Process Timeline Expectations**: Track expected completion times for current workflows
+      - **Historical Timing Patterns**: Note user's typical response times and temporal preferences
+      - **Temporal Context Shifts**: Recognize when time factors change conversation urgency or priority
+      
+      **Time-Based Decision Making:**
+      - **Priority Adjustment**: Increase priority for time-sensitive topics in memory management
+      - **Urgency Escalation**: Recognize when time constraints require immediate action or escalation
+      - **Timeline Communication**: Provide realistic time expectations based on available information
+      - **Temporal Conflict Resolution**: Handle conflicting time requirements or competing deadlines
 
       ### WORKING MEMORY STRUCTURE:
       Your working memory is maintained as a structured string with seven key sections. Each section must be continuously updated during the conversation to capture all relevant information and emotional cues:
