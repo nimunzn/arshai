@@ -23,7 +23,8 @@ MANIFEST
 .history/
 # Poetry
 poetry.lock
-
+tests/*.json
+tests/.env.gemini
 # Virtual environments
 .env
 .venv
