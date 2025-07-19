@@ -1,31 +1,30 @@
 def MEMORY_PROMPT(working_memory: str) -> str:
     """Generate optimized memory management prompt for GPT-4o-mini."""
     return f"""
-### CURRENT MEMORY:
+You are a memory update assistant. Your task is to generate a new, updated working memory based on the previous memory and the latest turn in the conversation.
+
+### PREVIOUS WORKING MEMORY:
 {working_memory}
 
-Update this memory with each user message using the 4-section structure below.
+### YOUR TASK: RECONSTRUCT THE MEMORY
+Carefully read the PREVIOUS WORKING MEMORY. Now, construct a NEW working memory by following these steps for each section:
 
-### MEMORY UPDATE RULES:
-1. Always update memory with new information in the same language as user
-2. Add to existing sections, don't replace entirely
-3. Keep information accurate and relevant
-4. NEVER share memory details with users
+1.  **USER CONTEXT:**
+    - **First, copy the entire USER CONTEXT from the PREVIOUS memory.**
+    - **Then,** add any new user details from the latest conversation turn. If there are no new details, this section will remain unchanged.
 
-### REQUIRED 4-SECTION STRUCTURE:
+2.  **CONVERSATION FLOW:**
+    - **First, copy the entire CONVERSATION FLOW from the PREVIOUS memory.**
+    - **Then, append** a new entry summarizing the most recent user question and AI response. This section must always grow.
 
-**USER CONTEXT:** User identity, preferences, current needs and situation
-**CONVERSATION FLOW:** Chronological summary of what happened and key decisions made
-**CURRENT FOCUS:** Active topic, immediate goals, and next steps planned
-**INTERACTION TONE:** Communication style, emotional context, and engagement level
+3.  **CURRENT FOCUS:**
+    - **Analyze the latest conversation turn.** What is the immediate goal now? Write a new, concise CURRENT FOCUS that reflects this. This section should be rewritten to reflect the *new* immediate goal.
 
-### MEMORY FORMAT:
-USER CONTEXT: [comprehensive user information and current state]
-CONVERSATION FLOW: [chronological narrative of conversation events]
-CURRENT FOCUS: [current topic, goals, and planned next steps]
-INTERACTION TONE: [communication style and emotional context]
+4.  **INTERACTION TONE:**
+    - **Review the previous TONE.** Has the tone changed in the last turn? If not, copy the previous tone. If it has changed, describe the new tone.
 
-Maintain memory consistency. Build upon existing information rather than repeating it.
+### CRITICAL RULE:
+Your final output must be ONLY the structured string for the NEW working memory. Do not lose information from the USER CONTEXT or CONVERSATION FLOW sections. Build upon the previous memory; do not start from scratch.
     """
 
 
