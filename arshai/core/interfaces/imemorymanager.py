@@ -67,26 +67,17 @@ class IWorkingMemory(IDTO):
     def initialize_memory(cls) -> 'IWorkingMemory':
         """Create a new working memory state with initial values"""
         initial_working_memory = """
-        USER PROFILE:
-        New user with no established profile yet.
+        ### USER CONTEXT:
+        New user with no established profile yet. No specific preferences or requirements identified.
 
-        AGENT PROFILE:
-        General chatbot assistant awaiting specific role definition.
+        ### CONVERSATION FLOW:
+        Conversation just initiated. No previous interactions or context available.
 
-        CONVERSATION STORY:
-        Conversation just initiated.
+        ### CURRENT FOCUS:
+        Awaiting user's initial message to determine conversation direction and goals.
 
-        CURRENT CONVERSATION HISTORY:
-        No relevant interaction yet.
-
-        DIALOGUE PLANNING AND GOALS:
-        no goals yet.
-
-        KNOWLEDGE CACHE:
-        No cached knowledge yet.
-
-        CONVERSATION MOOD:
-        Neutral
+        ### INTERACTION TONE:
+        Neutral, professional tone. Ready to adapt to user's communication style and needs.
         """
         return cls(working_memory=initial_working_memory.strip())
     
@@ -123,26 +114,17 @@ class IStreamWorkingMemory(IStreamDTO):
     def initialize_memory(cls) -> 'IStreamWorkingMemory':
         """Create a new working memory state with initial values"""
         initial_working_memory = """
-        USER PROFILE:
-        New user with no established profile yet.
+        ### USER CONTEXT:
+        New user with no established profile yet. No specific preferences or requirements identified.
 
-        AGENT PROFILE:
-        General chatbot assistant awaiting specific role definition.
+        ### CONVERSATION FLOW:
+        Conversation just initiated. No previous interactions or context available.
 
-        CONVERSATION STORY:
-        Conversation just initiated.
+        ### CURRENT FOCUS:
+        Awaiting user's initial message to determine conversation direction and goals.
 
-        CURRENT CONVERSATION HISTORY:
-        No relevant interaction yet.
-
-        DIALOGUE PLANNING AND GOALS:
-        no goals yet.
-
-        KNOWLEDGE CACHE:
-        No cached knowledge yet.
-
-        CONVERSATION MOOD:
-        Neutral
+        ### INTERACTION TONE:
+        Neutral, professional tone. Ready to adapt to user's communication style and needs.
         """
         return cls(working_memory=initial_working_memory.strip())
     
