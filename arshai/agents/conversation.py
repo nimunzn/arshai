@@ -161,7 +161,7 @@ class ConversationAgent(IAgent):
             context_start = datetime.now()
 
             working_memory = self.context_manager.retrieve_working_memory(input.conversation_id)
-            logger.debug(f"Working memory data: {working_memory}")
+            logger.info(f"Fetched working memory data: {working_memory}")
            
             logger.info(f"Working memory loaded in {(datetime.now() - context_start).total_seconds()}s")
 
