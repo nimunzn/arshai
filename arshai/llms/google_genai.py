@@ -29,7 +29,7 @@ class GeminiClient(ILLM):
         Supports dual authentication methods:
         1. API Key (simpler): Set GOOGLE_API_KEY environment variable
         2. Service Account (enterprise): Set GOOGLE_SERVICE_ACCOUNT_PATH, 
-           GOOGLE_PROJECT_ID, GOOGLE_LOCATION environment variables
+           VERTEXAI_PROJECT_ID, VERTEXAI_LOCATION environment variables
         
         Args:
             config: LLM configuration
@@ -38,13 +38,13 @@ class GeminiClient(ILLM):
         self.logger = logging.getLogger(__name__)
         
         # Authentication configuration
-        self.api_key = os.environ.get("GOOGLE_API_KEY")
-        self.service_account_path = os.environ.get("GOOGLE_SERVICE_ACCOUNT_PATH")
-        self.project_id = os.environ.get("GOOGLE_PROJECT_ID")
-        self.location = os.environ.get("GOOGLE_LOCATION")
+        self.api_key = os.getenv("GOOGLE_API_KEY")
+        self.service_account_path = os.getenv("VERTEX_AI_SERVICE_ACCOUNT_PATH")
+        self.project_id = os.getenv("VERTEX_AI_PROJECT_ID")
+        self.location = os.getenv("VERTEX_AI_LOCATION")
         
         # Gemini-specific configuration
-        self.thinking_budget = int(os.environ.get("GOOGLE_THINKING_BUDGET", 
+        self.thinking_budget = int(os.getenv("VERTEX_AI_THINKING_BUDGET", 
                                                  0 if "flash" in config.model.lower() else 128))
         
         self.logger.info(f"Initializing Gemini client with model: {self.config.model}")
@@ -221,10 +221,7 @@ class GeminiClient(ILLM):
             conversation_history = [combined_content]
             
             while current_turn < input.max_turns:
-                self.logger.info(f"🔄 GEMINI CHAT TURN: {current_turn}/{input.max_turns}")
-                self.logger.info(f"   📚 Conversation History Length: {len(conversation_history)}")
-                self.logger.info(f"   📋 Tools Available: {len(tools)} tools")
-                self.logger.info(f"   📋 Tool Names: {[tool.get('name', 'unnamed') for tool in tools]}")
+                self.logger.info(f"Turn {current_turn}: Processing with {len(tools)} tools")
                 
                 try:
                     # Prepare generation config
@@ -236,8 +233,6 @@ class GeminiClient(ILLM):
                     
                     # Convert tool functions to the format expected by google-genai
                     if tools and input.callable_functions:
-                        self.logger.info(f"🔧 SETTING UP TOOLS FOR GEMINI:")
-                        
                         # Create Python callable functions list for automatic function calling
                         python_tools = []
                         for tool_def in tools:
@@ -247,11 +242,10 @@ class GeminiClient(ILLM):
                                 
                                 # Check if function is async and wrap it if needed
                                 if asyncio.iscoroutinefunction(original_func):
-                                    self.logger.info(f"   🔄 Wrapping async function: {tool_name}")
                                     
                                     def make_sync_wrapper(async_func):
                                         @functools.wraps(async_func)
-                                        def sync_wrapper(*args, **kwargs):
+                                        def sync_wrapper(*args, **kwargs) -> str:  # Fixed: specific return type instead of Any
                                             try:
                                                 # Try to get existing event loop
                                                 loop = asyncio.get_running_loop()
@@ -259,24 +253,22 @@ class GeminiClient(ILLM):
                                                 import concurrent.futures
                                                 with concurrent.futures.ThreadPoolExecutor() as executor:
                                                     future = executor.submit(asyncio.run, async_func(*args, **kwargs))
-                                                    return future.result()
+                                                    result = future.result()
+                                                    # Ensure we return a string for Gemini
+                                                    return str(result) if result is not None else ""
                                             except RuntimeError:
                                                 # No event loop running, we can create one
-                                                return asyncio.run(async_func(*args, **kwargs))
+                                                result = asyncio.run(async_func(*args, **kwargs))
+                                                return str(result) if result is not None else ""
                                         return sync_wrapper
                                     
                                     wrapped_func = make_sync_wrapper(original_func)
                                     python_tools.append(wrapped_func)
-                                    self.logger.info(f"   📋 Adding wrapped async function: {tool_name}")
                                 else:
                                     python_tools.append(original_func)
-                                    self.logger.info(f"   📋 Adding sync function: {tool_name}")
                         
                         if python_tools:
-                            self.logger.info(f"   ✅ Using {len(python_tools)} Python tools with automatic function calling")
                             generation_config.tools = python_tools
-                        else:
-                            self.logger.warning(f"   ⚠️ No matching callable functions found for tools")
                     
                     # Generate content with tools
                     response = self._client.models.generate_content(
@@ -307,24 +299,16 @@ class GeminiClient(ILLM):
                                     # With automatic function calling, we primarily expect text responses
                                     # after tools have been executed internally by the SDK
                                     if hasattr(part, 'text') and part.text:
-                                        self.logger.info(f"💬 TEXT RESPONSE RECEIVED:")
-                                        self.logger.info(f"   Content: {part.text}")
-                                        self.logger.info(f"   Structure Type Expected: {input.structure_type.__name__ if input.structure_type else 'None'}")
-                                        
                                         if not input.structure_type:
-                                            self.logger.info(f"   ✅ Returning unstructured text response")
                                             return {"llm_response": part.text, "usage": accumulated_usage}
                                         else:
                                             # Try to parse as structured response
-                                            self.logger.info(f"   🔍 Attempting to parse as structured response")
                                             try:
                                                 final_response = self._parse_to_structure(part.text, input.structure_type)
-                                                self.logger.info(f"   ✅ Structured parsing successful: {final_response}")
                                                 break
                                             except ValueError as e:
                                                 # Continue if parsing fails
-                                                self.logger.warning(f"   ⚠️ Structured parsing failed: {str(e)}")
-                                                self.logger.info(f"   📝 Adding to conversation history and continuing")
+                                                self.logger.warning(f"Structured parsing failed: {str(e)}")
                                                 conversation_history.append(part.text)
                     
                     current_turn += 1
@@ -342,6 +326,201 @@ class GeminiClient(ILLM):
         except Exception as e:
             self.logger.error(f"Error in Gemini chat_with_tools: {str(e)}")
             return {"llm_response": f"An error occurred: {str(e)}", "usage": None}
+    
+    async def stream_with_tools(
+        self,
+        input: ILLMInput
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Process a streaming chat with tools message using the Gemini API.
+        
+        Args:
+            input: The LLM input containing system prompt, user message, tools, and options
+            
+        Yields:
+            Dict containing streaming response chunks and usage information
+        """
+        try:
+            # Prepare content for Gemini
+            system_content = input.system_prompt
+            user_content = input.user_message
+            
+            # Combine system and user content for Gemini
+            combined_content = f"{system_content}\n\nUser: {user_content}"
+            
+            # Prepare tools for Gemini
+            tools = []
+            if input.tools_list:
+                # Convert tools to Gemini format
+                for tool in input.tools_list:
+                    tools.append(tool)
+            
+            # Add structure function if provided
+            if input.structure_type:
+                structure_function = self._create_structure_function(input.structure_type)
+                tools.append(structure_function)
+                combined_content += f"\n\nYou MUST use the {input.structure_type.__name__.lower()} function to format your response."
+            
+            current_turn = 0
+            final_response = None
+            accumulated_usage = None
+            conversation_history = [combined_content]
+            
+            while current_turn < input.max_turns:
+                self.logger.info(f"Stream turn {current_turn}: Processing with {len(tools)} tools")
+                
+                try:
+                    # Prepare generation config
+                    generation_config = GenerateContentConfig(
+                        max_output_tokens=self.config.max_tokens,
+                        temperature=self.config.temperature,
+                        thinking_config=ThinkingConfig(thinking_budget=self.thinking_budget)
+                    )
+                    
+                    # Convert tool functions to the format expected by google-genai
+                    if tools and input.callable_functions:
+                        # Create Python callable functions list for automatic function calling
+                        python_tools = []
+                        for tool_def in tools:
+                            tool_name = tool_def.get('name')
+                            if tool_name in input.callable_functions:
+                                original_func = input.callable_functions[tool_name]
+                                
+                                # Check if function is async and wrap it if needed
+                                if asyncio.iscoroutinefunction(original_func):
+                                    
+                                    def make_sync_wrapper(async_func):
+                                        @functools.wraps(async_func)
+                                        def sync_wrapper(*args, **kwargs) -> str:  # Fixed: specific return type
+                                            try:
+                                                # Try to get existing event loop
+                                                loop = asyncio.get_running_loop()
+                                                # If we're already in an async context, we need to use a thread
+                                                import concurrent.futures
+                                                with concurrent.futures.ThreadPoolExecutor() as executor:
+                                                    future = executor.submit(asyncio.run, async_func(*args, **kwargs))
+                                                    result = future.result()
+                                                    # Ensure we return a string for Gemini
+                                                    return str(result) if result is not None else ""
+                                            except RuntimeError:
+                                                # No event loop running, we can create one
+                                                result = asyncio.run(async_func(*args, **kwargs))
+                                                return str(result) if result is not None else ""
+                                        return sync_wrapper
+                                    
+                                    wrapped_func = make_sync_wrapper(original_func)
+                                    python_tools.append(wrapped_func)
+                                else:
+                                    python_tools.append(original_func)
+                        
+                        if python_tools:
+                            generation_config.tools = python_tools
+                    
+                    # Generate streaming content with tools
+                    stream = self._client.models.generate_content_stream(
+                        model=self.config.model,
+                        contents=conversation_history,
+                        config=generation_config
+                    )
+                    
+                    accumulated_text = ""
+                    
+                    # Process streaming response
+                    for chunk in stream:
+                        if hasattr(chunk, 'candidates') and chunk.candidates:
+                            candidate = chunk.candidates[0]
+                            
+                            # Check for text response chunks
+                            if hasattr(candidate, 'content') and candidate.content:
+                                if hasattr(candidate.content, 'parts'):
+                                    for part in candidate.content.parts:
+                                        if hasattr(part, 'text') and part.text:
+                                            chunk_text = part.text
+                                            accumulated_text += chunk_text
+                                            
+                                            # Yield streaming chunk
+                                            yield {
+                                                "type": "content",
+                                                "content": chunk_text,
+                                                "delta": chunk_text,
+                                                "accumulated": accumulated_text
+                                            }
+                        
+                        # Process usage metadata if available
+                        if hasattr(chunk, 'usage_metadata') and chunk.usage_metadata:
+                            current_usage = self._process_usage_metadata(chunk.usage_metadata)
+                            if accumulated_usage is None:
+                                accumulated_usage = current_usage
+                            else:
+                                # Accumulate usage metrics
+                                accumulated_usage['total_token_count'] += current_usage.get('total_token_count', 0)
+                                accumulated_usage['prompt_token_count'] += current_usage.get('prompt_token_count', 0)
+                                accumulated_usage['candidates_token_count'] += current_usage.get('candidates_token_count', 0)
+                    
+                    # Process accumulated response
+                    if accumulated_text:
+                        self.logger.info(f"💬 STREAMING TEXT RESPONSE COMPLETED:")
+                        self.logger.info(f"   Content Length: {len(accumulated_text)}")
+                        self.logger.info(f"   Structure Type Expected: {input.structure_type.__name__ if input.structure_type else 'None'}")
+                        
+                        if not input.structure_type:
+                            self.logger.info(f"   ✅ Returning unstructured streaming response")
+                            yield {
+                                "type": "final",
+                                "content": accumulated_text,
+                                "usage": accumulated_usage
+                            }
+                            return
+                        else:
+                            # Try to parse as structured response
+                            self.logger.info(f"   🔍 Attempting to parse as structured response")
+                            try:
+                                final_response = self._parse_to_structure(accumulated_text, input.structure_type)
+                                self.logger.info(f"   ✅ Structured parsing successful")
+                                yield {
+                                    "type": "final",
+                                    "content": final_response,
+                                    "usage": accumulated_usage
+                                }
+                                return
+                            except ValueError as e:
+                                # Continue if parsing fails
+                                self.logger.warning(f"   ⚠️ Structured parsing failed: {str(e)}")
+                                self.logger.info(f"   📝 Adding to conversation history and continuing")
+                                conversation_history.append(accumulated_text)
+                    
+                    current_turn += 1
+                    
+                except Exception as e:
+                    self.logger.error(f"Error in Gemini stream_with_tools turn {current_turn}: {str(e)}")
+                    yield {
+                        "type": "error",
+                        "content": f"An error occurred: {str(e)}",
+                        "usage": accumulated_usage
+                    }
+                    return
+            
+            # Return final response or max turns message
+            if final_response is not None:
+                yield {
+                    "type": "final",
+                    "content": final_response,
+                    "usage": accumulated_usage
+                }
+            else:
+                yield {
+                    "type": "final",
+                    "content": "Maximum number of function calling turns reached",
+                    "usage": accumulated_usage
+                }
+                
+        except Exception as e:
+            self.logger.error(f"Error in Gemini stream_with_tools: {str(e)}")
+            yield {
+                "type": "error",
+                "content": f"An error occurred: {str(e)}",
+                "usage": None
+            }
     
     def chat_completion(self, input: ILLMInput) -> Union[ILLMOutput, str]:
         """
