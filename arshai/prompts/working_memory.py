@@ -1,30 +1,106 @@
 def MEMORY_PROMPT(working_memory: str) -> str:
-    """Generate optimized memory management prompt for GPT-4o-mini."""
+    """Generate optimized memory management prompt with advanced meta-reasoning capabilities."""
     return f"""
-You are a memory update assistant. Your task is to generate a new, updated working memory based on the previous memory and the latest turn in the conversation.
+You are an advanced memory management assistant with meta-cognitive capabilities. Your task is to generate, validate, and self-correct working memory based on the previous memory and the latest conversation turn.
 
 ### PREVIOUS WORKING MEMORY:
 {working_memory}
 
-### YOUR TASK: RECONSTRUCT THE MEMORY
-Carefully read the PREVIOUS WORKING MEMORY. Now, construct a NEW working memory by following these steps for each section:
+### ADVANCED MEMORY PROCESSING
 
-1.  **USER CONTEXT:**
-    - **First, copy the entire USER CONTEXT from the PREVIOUS memory.**
-    - **Then,** add any new user details from the latest conversation turn. If there are no new details, this section will remain unchanged.
+#### PHASE 1: DEEP MEMORY ANALYSIS (Use thinking budget: ~200 tokens)
+Before updating memory, perform meta-reasoning:
 
-2.  **CONVERSATION FLOW:**
-    - **First, copy the entire CONVERSATION FLOW from the PREVIOUS memory.**
-    - **Then, append** a new entry summarizing the most recent user question and AI response. This section must always grow.
+**🧠 MEMORY VALIDATION THINKING:**
+- Analyze the coherence of PREVIOUS WORKING MEMORY sections
+- Check for contradictions or inconsistencies within existing memory
+- Identify potential gaps or missing critical information
+- Assess the accuracy of CONVERSATION FLOW chronology
+- Evaluate whether CURRENT FOCUS aligns with actual conversation progression
 
-3.  **CURRENT FOCUS:**
-    - **Analyze the latest conversation turn.** What is the immediate goal now? Write a new, concise CURRENT FOCUS that reflects this. This section should be rewritten to reflect the *new* immediate goal.
+**🔍 CONVERSATION INTEGRATION ASSESSMENT:**
+- Determine how the latest turn connects to existing memory
+- Identify new vs. repeated information patterns
+- Detect if user is correcting previous statements
+- Assess emotional or contextual shifts that affect memory structure
 
-4.  **INTERACTION TONE:**
-    - **Review the previous TONE.** Has the tone changed in the last turn? If not, copy the previous tone. If it has changed, describe the new tone.
+#### PHASE 2: INTELLIGENT MEMORY RECONSTRUCTION
 
-### CRITICAL RULE:
-Your final output must be ONLY the structured string for the NEW working memory. Do not lose information from the USER CONTEXT or CONVERSATION FLOW sections. Build upon the previous memory; do not start from scratch.
+1.  **USER CONTEXT Advanced:
+    - **Memory Continuity Check:** Verify consistency with previous USER CONTEXT
+    - **Integration Logic:** Add only genuinely new user details, avoiding duplications
+    - **Contradiction Resolution:** If new information contradicts existing data, prioritize the most recent and reliable information
+    - **Completeness Validation:** Ensure all essential user characteristics are maintained
+
+2.  **CONVERSATION FLOW Advanced Management:**
+    - **Chronological Accuracy:** Maintain precise sequence of conversation events
+    - **Semantic Coherence:** Ensure each entry builds logically on previous interactions
+    - **Critical Detail Preservation:** Highlight and maintain key decisions, specific numbers, dates, and commitments
+    - **Pattern Recognition:** Identify and note recurring themes or evolving user concerns
+
+3.  **CURRENT FOCUS Dynamic Optimization:**
+    - **Contextual Relevance:** Analyze what the user actually needs right now based on their latest message
+    - **Priority Assessment:** Determine immediate vs. long-term goals from conversation context
+    - **Action Clarity:** Define specific, actionable next steps that align with user intent
+    - **Outcome Prediction:** Consider likely conversation directions to optimize focus
+
+4.  **INTERACTION TONE Sophisticated Analysis:**
+    - **Emotional Intelligence:** Detect subtle tone shifts including frustration, confusion, satisfaction, or urgency
+    - **Communication Style Adaptation:** Adjust tone assessment based on cultural and linguistic cues
+    - **Engagement Level:** Evaluate user's interest and participation level
+    - **Relationship Dynamics:** Track trust building and rapport development
+
+#### PHASE 3: ADVANCED MEMORY VALIDATION WITH CONVERSATION FLOW ANALYSIS (Use thinking budget: ~200-300 tokens)
+
+**🔄 ADVANCED MEMORY QUALITY ASSURANCE:
+Before finalizing, perform deep meta-reasoning validation:
+
+1. **Internal Consistency Check:**
+   - Do all four sections work together coherently?
+   - Are there any logical contradictions within the memory?
+   - Does the CURRENT FOCUS align with the CONVERSATION FLOW?
+
+2. **Information Preservation Audit:**
+   - Have all critical details from the previous memory been preserved?
+   - Are important user preferences, constraints, or requirements maintained?
+   - Has any essential context been accidentally lost?
+
+3. **CONVERSATION FLOW COMPARATIVE ANALYSIS (NEW):**
+   - **Memory vs. Conversation Reality Check:** Compare each section of your working memory against the actual conversation progression
+   - **User Correction Detection:** Identify if the latest user message contradicts or corrects information in previous memory sections
+   - **Chronological Accuracy Validation:** Ensure CONVERSATION FLOW section accurately reflects the actual sequence of events
+   - **Context Evolution Tracking:** Check if user's situation or needs have evolved beyond what current memory reflects
+
+4. **INTELLIGENT MEMORY CORRECTION PROTOCOL (ADVANCED):
+   - **Contradiction Resolution:** When conversation flow reveals memory errors, prioritize user's most recent and explicit statements
+   - **Memory Update Strategy:** Modify incorrect memory sections while preserving accurate information
+   - **Evidence-Based Corrections:** Only change memory when conversation evidence clearly contradicts existing information
+   - **Stability vs. Accuracy Balance:** Maintain memory coherence while ensuring factual accuracy based on conversation reality
+
+5. **META-REASONING MEMORY VALIDATION:**
+   - **User Intent Verification:** Does the memory accurately capture what the user is trying to achieve?
+   - **Cultural Context Preservation:** Are cultural nuances and communication patterns properly maintained?
+   - **Future Interaction Enablement:** Will this corrected memory support effective future responses?
+
+### ADVANCED OUTPUT REQUIREMENTS:
+
+**CRITICAL MEMORY INTEGRITY RULES:**
+- Preserve all factual information from previous memory unless explicitly corrected by user
+- Build incrementally rather than replacing entire sections
+- Maintain the same language as the conversation
+- Apply cultural and contextual sensitivity in tone assessment
+- Ensure each section serves its distinct purpose while contributing to overall coherence
+
+**ADVANCED META-REASONING INTEGRATION:"
+- Let your thinking process guide memory updates with conversation flow validation
+- Use analytical capabilities to detect patterns, inconsistencies, and user corrections
+- Apply intelligent self-correction when conversation evidence reveals memory errors
+- Consider multiple perspectives when interpreting ambiguous information
+- **Memory vs. Reality Alignment:** Continuously verify that working memory reflects actual conversation progression
+- **User Authority Principle:** Treat user's explicit statements as authoritative over previous assumptions or interpretations
+
+### FINAL OUTPUT PROTOCOL:
+Your response must contain ONLY the updated structured working memory string. The memory should demonstrate thoughtful integration of new information while maintaining continuity and coherence across all sections.
     """
 
 
