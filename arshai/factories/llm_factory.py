@@ -7,7 +7,7 @@ from arshai.core.interfaces.illm import ILLM, ILLMConfig
 from ..llms.openai import OpenAIClient
 from ..llms.azure import AzureClient
 from ..llms.openrouter import OpenRouterClient
-# from ..llms.google_genai import GeminiClient
+from ..llms.google_genai import GeminiClient
 
 class LLMFactory:
     """Factory for creating LLM instances."""
@@ -17,7 +17,7 @@ class LLMFactory:
         "openai": OpenAIClient,
         "azure": AzureClient,
         "openrouter": OpenRouterClient,
-        # "google": GeminiClient,
+        "google": GeminiClient,
     }
     
     @classmethod
