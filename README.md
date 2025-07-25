@@ -136,7 +136,7 @@ Production-ready monitoring and instrumentation for AI systems with OpenTelemetr
 
 **Enterprise Features**:
 - **OpenTelemetry Native**: Export to Jaeger, Prometheus, Datadog, New Relic, any OTLP backend
-- **Provider-Specific Token Counting**: Native APIs for OpenAI, Azure, Anthropic, Google
+- **LLM Usage Data Integration**: Direct usage from LLM responses for accurate token counts
 - **Streaming Observability**: Real-time token-level timing for streaming responses
 - **Non-Intrusive Design**: Zero side effects on LLM calls with graceful degradation
 - **Factory Integration**: Automatic instrumentation through LLMFactory
@@ -454,7 +454,7 @@ Arshai provides enterprise-grade observability for production AI systems with co
 
 - **Zero-Fallback Monitoring**: Always capture the 4 critical LLM metrics without any fallback mechanisms
 - **OpenTelemetry Native**: Export to any OTLP-compatible backend (Jaeger, Prometheus, Datadog, New Relic)
-- **Provider-Specific Token Counting**: Accurate token counting using native APIs for all major providers
+- **LLM Usage Data Integration**: Accurate token counting from LLM response usage data
 - **Streaming Observability**: Real-time token-level timing for streaming responses
 - **Non-Intrusive Design**: Zero side effects on LLM calls with graceful degradation
 - **Production-Ready**: Comprehensive configuration, privacy controls, and performance optimization

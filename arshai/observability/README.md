@@ -27,9 +27,8 @@ arshai/observability/
 ├── config.py                   # YAML configuration support
 ├── core.py                     # ObservabilityManager
 ├── metrics.py                  # MetricsCollector with key metrics
-├── token_counters.py           # Provider-specific token counting
-├── decorators.py               # Non-intrusive decorators
 ├── factory_integration.py     # LLMFactory integration
+├── decorators.py               # Non-intrusive decorators
 └── README.md                   # This file
 ```
 
@@ -155,11 +154,11 @@ client = observable_factory.create("openai", llm_config)
 
 The factory automatically detects and supports:
 
-- **OpenAI**: `tiktoken` for accurate token counting
-- **Azure OpenAI**: Same as OpenAI (uses `tiktoken`)
-- **Anthropic Claude**: Native token counting API
-- **Google Gemini**: Native token counting API
-- **Fallback**: Character-based estimation for other providers
+- **OpenAI**: Uses usage data from API responses
+- **Azure OpenAI**: Uses usage data from API responses
+- **Anthropic Claude**: Uses usage data from API responses
+- **Google Gemini**: Uses usage data from API responses
+- **OpenRouter**: Uses usage data from API responses
 
 ## 🔧 Configuration Options
 
@@ -178,7 +177,6 @@ observability:
   
   # Key feature: Token timing
   track_token_timing: true
-  enable_token_counting: true
   
   # Privacy controls
   log_prompts: false      # Never enable in production
@@ -258,7 +256,7 @@ except Exception:
 
 ## 🔄 Streaming Support
 
-The system provides comprehensive streaming observability with real-time token counting:
+The system provides comprehensive streaming observability with usage data extraction:
 
 ### Automatic Streaming Observability
 ```python
@@ -314,33 +312,33 @@ async def concurrent_llm_requests():
     # Much faster than sequential requests!
 ```
 
-### Streaming Token Counting
+### Streaming Usage Data
 
-The system supports provider-specific streaming token counting:
+The system supports provider-specific streaming usage data extraction:
 
 #### OpenAI/Azure Streaming
-- **Real-time counting**: Uses `tiktoken` to count tokens in each chunk
-- **Usage extraction**: Automatically extracts final usage from last chunk
+- **Usage extraction**: Automatically extracts final usage data from last chunk
 - **Chunk format**: Handles OpenAI's `choices[0].delta.content` format
+- **Real-time timing**: Tracks token timing without custom counting
 
 #### Anthropic Streaming  
 - **Event-based**: Extracts usage from `message_stop` events
-- **Estimation**: Uses ~3.5 characters per token for real-time estimation
 - **Usage mapping**: Maps `input_tokens`/`output_tokens` to standard format
+- **Stream timing**: Records timing for each content chunk
 
 #### Google Gemini Streaming
-- **Content-based**: Counts tokens in streaming text content
-- **Estimation**: Uses ~4 characters per token for real-time counting
+- **Content-based**: Extracts usage data from streaming responses
+- **Stream timing**: Real-time timing tracking for content chunks
 
 #### OpenRouter Streaming
 - **API-compatible**: Uses OpenAI-compatible streaming format
-- **Flexible models**: Handles various underlying model formats
+- **Usage data**: Extracts final usage from stream completion
 
 ### Streaming Metrics
 - **Time to first token**: Measured when first content chunk arrives
 - **Time to last token**: Measured when final content chunk arrives  
 - **Duration**: Calculated between first and last token timestamps
-- **Token counting**: Real-time counting + final usage data validation
+- **Usage data**: Final token counts extracted from LLM response
 - **Chunk-level timing**: Each chunk timestamp recorded for analysis
 
 ## 🛠 Advanced Usage
@@ -432,52 +430,6 @@ Works with any OpenTelemetry-compatible backend:
 - **New Relic**: APM and monitoring
 - **OpenTelemetry Collector**: Data pipeline hub
 
-## 🔍 Token Counting Details
-
-### Provider-Specific Implementation
-
-#### OpenAI/Azure
-```python
-# Uses tiktoken library for accurate counting
-import tiktoken
-
-encoding = tiktoken.encoding_for_model("gpt-4")
-tokens = encoding.encode("Hello world")
-count = len(tokens)
-```
-
-#### Anthropic Claude
-```python
-# Uses Anthropic's native token counting API
-import anthropic
-
-client = anthropic.Anthropic()
-response = client.messages.count_tokens(
-    model="claude-3-sonnet-20240229",
-    messages=[{"role": "user", "content": "Hello"}]
-)
-count = response.input_tokens
-```
-
-#### Google Gemini
-```python
-# Uses Google's token counting API
-from google import genai
-
-client = genai.Client()
-response = client.models.count_tokens(
-    model="gemini-pro",
-    contents="Hello world"
-)
-count = response.total_tokens
-```
-
-### Fallback Estimation
-
-For unsupported providers, uses character-based estimation:
-- ~4 characters per token (conservative estimate)
-- Provides reasonable approximation for cost planning
-
 ## 🐛 Troubleshooting
 
 ### Common Issues
@@ -487,10 +439,10 @@ For unsupported providers, uses character-based estimation:
    - Verify OTLP endpoint configuration
    - Ensure OpenTelemetry dependencies installed
 
-2. **Token counting not working**
-   - Install provider-specific libraries (`tiktoken`, `anthropic`, etc.)
+2. **Token metrics not showing**
    - Check `track_token_timing=true` in config
-   - Verify API credentials for token counting APIs
+   - Verify LLM responses include usage data (`prompt_tokens`, `completion_tokens`, `total_tokens`)
+   - Ensure provider is supported (OpenAI, Azure, Anthropic, Google)
 
 3. **High memory usage**
    - Reduce `max_span_attributes` in config
