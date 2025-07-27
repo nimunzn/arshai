@@ -31,6 +31,7 @@ class ILLMInput(IDTO):
     user_message: str = Field(description="the message of the user prompt")
     tools_list: List[Dict] = Field(default=[], description="list of defined tools for llm")
     callable_functions: Dict[str, Callable] = Field(default={}, description="list of callable tools for this message")
+    background_tasks: Dict[str, Callable] = Field(default={}, description="list of background tasks for fire-and-forget execution")
     structure_type: Type[T] = Field(default=None, description="Output response")
     max_turns: int = Field(default=10, description="Times that llm can call tools")
 
