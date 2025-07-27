@@ -265,7 +265,7 @@ class TestGeminiClient:
     async def test_simple_chat(self, gemini_client):
         """Test simple knowledge query - chat method"""
         # Rate limiting delay
-        await asyncio.sleep(3)
+        await asyncio.sleep(10)
         
         test_data = TEST_CASES["simple_knowledge"]
         
@@ -300,7 +300,7 @@ class TestGeminiClient:
     async def test_simple_stream(self, gemini_client):
         """Test simple knowledge query - stream method"""
         # Rate limiting delay
-        await asyncio.sleep(3)
+        await asyncio.sleep(10)
         
         test_data = TEST_CASES["simple_knowledge"]
         
@@ -349,7 +349,7 @@ class TestGeminiClient:
     async def test_structured_chat(self, gemini_client):
         """Test structured sentiment analysis - chat method"""
         # Rate limiting delay
-        await asyncio.sleep(3)
+        await asyncio.sleep(10)
         
         test_data = TEST_CASES["sentiment_structured"]
         
@@ -387,7 +387,7 @@ class TestGeminiClient:
     async def test_structured_stream(self, gemini_client):
         """Test structured sentiment analysis - stream method"""
         # Rate limiting delay
-        await asyncio.sleep(3)
+        await asyncio.sleep(10)
         
         test_data = TEST_CASES["sentiment_structured"]
         
@@ -437,7 +437,7 @@ class TestGeminiClient:
     async def test_tool_calling_chat(self, gemini_client):
         """Test tool calling with structured output - chat method"""
         # Rate limiting delay
-        await asyncio.sleep(4)
+        await asyncio.sleep(10)
         
         test_data = TEST_CASES["math_tools"]
         
@@ -478,7 +478,7 @@ class TestGeminiClient:
     async def test_tool_calling_stream(self, gemini_client):
         """Test tool calling with structured output - stream method"""
         # Rate limiting delay
-        await asyncio.sleep(4)
+        await asyncio.sleep(10)
         
         test_data = TEST_CASES["math_tools"]
         
@@ -534,7 +534,7 @@ class TestGeminiClient:
     async def test_parallel_function_calling_chat(self, gemini_client):
         """Test parallel function calling capabilities - chat method"""
         # Rate limiting delay
-        await asyncio.sleep(4)
+        await asyncio.sleep(10)
         
         test_data = TEST_CASES["parallel_tools"]
         
@@ -570,7 +570,7 @@ class TestGeminiClient:
     async def test_parallel_function_calling_stream(self, gemini_client):
         """Test parallel function calling capabilities - stream method"""
         # Rate limiting delay
-        await asyncio.sleep(4)
+        await asyncio.sleep(10)
         
         test_data = TEST_CASES["parallel_tools"]
         
@@ -619,7 +619,7 @@ class TestGeminiClient:
     async def test_background_tasks_chat(self, gemini_client):
         """Test background tasks (fire-and-forget) - chat method with direct variable verification"""
         # Rate limiting delay
-        await asyncio.sleep(4)
+        await asyncio.sleep(10)
         
         # Reset the test variable before starting
         global background_task_executed
@@ -665,7 +665,7 @@ class TestGeminiClient:
     async def test_background_tasks_stream(self, gemini_client):
         """Test background tasks (fire-and-forget) - stream method with direct variable verification"""
         # Rate limiting delay
-        await asyncio.sleep(4)
+        await asyncio.sleep(10)
         
         # Reset the test variable before starting
         global background_task_executed
@@ -720,7 +720,7 @@ class TestGeminiClient:
     async def test_usage_tracking(self, gemini_client):
         """Test that both methods provide usage information"""
         # Rate limiting delay
-        await asyncio.sleep(5)
+        await asyncio.sleep(10)
         
         input_data = ILLMInput(
             system_prompt="You are a helpful mathematics tutor. Provide detailed explanations with step-by-step solutions, mathematical reasoning, and practical examples. Write comprehensive responses of at least 100 words to help students understand concepts thoroughly.",
