@@ -110,6 +110,53 @@ class StreamMathResult(TypedDict):
         }
 
 
+# Retry utility for rate limiting
+async def retry_on_rate_limit(func, *args, max_retries=2, wait_seconds=30, **kwargs):
+    """
+    Retry function if rate limiting (429) error occurs.
+    
+    Args:
+        func: Function to execute
+        *args: Function arguments
+        max_retries: Maximum number of retries (default: 2)
+        wait_seconds: Seconds to wait between retries (default: 30)
+        **kwargs: Function keyword arguments
+        
+    Returns:
+        Function result
+        
+    Raises:
+        Last exception if all retries fail
+    """
+    last_exception = None
+    
+    for attempt in range(max_retries + 1):  # +1 for initial attempt
+        try:
+            if asyncio.iscoroutinefunction(func):
+                return await func(*args, **kwargs)
+            else:
+                return func(*args, **kwargs)
+        except ValueError as e:
+            if "429" in str(e) and "RESOURCE_EXHAUSTED" in str(e):
+                last_exception = e
+                if attempt < max_retries:  # Don't wait after last attempt
+                    logger.warning(f"Rate limit hit (attempt {attempt + 1}/{max_retries + 1}). Waiting {wait_seconds} seconds...")
+                    await asyncio.sleep(wait_seconds)
+                    continue
+                else:
+                    logger.error(f"Max retries ({max_retries}) reached for rate limiting. Giving up.")
+                    raise e
+            else:
+                # Not a rate limit error, re-raise immediately
+                raise e
+        except Exception as e:
+            # Other exceptions, re-raise immediately
+            raise e
+    
+    # Should not reach here, but just in case
+    raise last_exception
+
+
 # Test Configuration and Fixtures
 @pytest.fixture
 def gemini_config():
@@ -122,9 +169,13 @@ def gemini_config():
 
 
 @pytest.fixture
-def gemini_client(gemini_config):
-    """Create Gemini client for testing"""
-    return GeminiClient(gemini_config)
+async def gemini_client(gemini_config):
+    """Create Gemini client for testing with rate limit retry"""
+    def create_client():
+        return GeminiClient(gemini_config)
+    
+    # Use retry mechanism for client creation
+    return await retry_on_rate_limit(create_client)
 
 
 # Test Data
@@ -569,152 +620,164 @@ class TestGeminiClient:
     @pytest.mark.asyncio
     async def test_parallel_function_calling_stream(self, gemini_client):
         """Test parallel function calling capabilities - stream method"""
-        # Rate limiting delay
-        await asyncio.sleep(10)
         
-        test_data = TEST_CASES["parallel_tools"]
-        
-        # Test Stream Method with parallel function calling
-        stream_input = ILLMInput(
-            system_prompt=test_data["system_prompt"],
-            user_message=test_data["user_message"],
-            tools_list=test_data["tools"],
-            callable_functions=test_data["functions"],
-            max_turns=5
-        )
-        
-        stream_chunks = []
-        final_stream_text = ""
-        content_chunks_received = 0
-        function_calls_detected = 0
-        
-        async for chunk in gemini_client.stream(stream_input):
-            stream_chunks.append(chunk)
-            logger.info(f"🔧 Parallel stream chunk: {chunk}")
+        async def _run_test():
+            # Rate limiting delay
+            await asyncio.sleep(10)
             
-            if chunk.get("llm_response") and chunk["llm_response"] is not None:
-                content_chunks_received += 1
-                if isinstance(chunk["llm_response"], str):
-                    final_stream_text = chunk["llm_response"]
-                    # Count function calls mentioned in logs (indirect way to verify parallel execution)
-                    if "function" in chunk["llm_response"].lower():
-                        function_calls_detected += 1
+            test_data = TEST_CASES["parallel_tools"]
+            
+            # Test Stream Method with parallel function calling
+            stream_input = ILLMInput(
+                system_prompt=test_data["system_prompt"],
+                user_message=test_data["user_message"],
+                tools_list=test_data["tools"],
+                callable_functions=test_data["functions"],
+                max_turns=5
+            )
+            
+            stream_chunks = []
+            final_stream_text = ""
+            content_chunks_received = 0
+            function_calls_detected = 0
+            
+            async for chunk in gemini_client.stream(stream_input):
+                stream_chunks.append(chunk)
+                logger.info(f"🔧 Parallel stream chunk: {chunk}")
+                
+                if chunk.get("llm_response") and chunk["llm_response"] is not None:
+                    content_chunks_received += 1
+                    if isinstance(chunk["llm_response"], str):
+                        final_stream_text = chunk["llm_response"]
+                        # Count function calls mentioned in logs (indirect way to verify parallel execution)
+                        if "function" in chunk["llm_response"].lower():
+                            function_calls_detected += 1
+            
+            # Validate streaming behavior for parallel function calling
+            assert len(stream_chunks) > 0, "No stream chunks received"
+            assert content_chunks_received > 0, "No content chunks received from streaming"
+            assert len(final_stream_text) > 0, "No final stream text received"
+            
+            # Validate that all expected calculations are present (parallel execution)
+            assert validate_patterns_flexible(
+                final_stream_text, 
+                test_data["expected_patterns"], 
+                test_data["min_matches"], 
+                "parallel_function_calling_stream"
+            ), f"Not enough patterns matched in parallel stream response"
+            
+            logger.info(f"✅ Parallel function calling stream test passed - Contains multiple calculation results, Stream chunks: {content_chunks_received}")
         
-        # Validate streaming behavior for parallel function calling
-        assert len(stream_chunks) > 0, "No stream chunks received"
-        assert content_chunks_received > 0, "No content chunks received from streaming"
-        assert len(final_stream_text) > 0, "No final stream text received"
-        
-        # Validate that all expected calculations are present (parallel execution)
-        assert validate_patterns_flexible(
-            final_stream_text, 
-            test_data["expected_patterns"], 
-            test_data["min_matches"], 
-            "parallel_function_calling_stream"
-        ), f"Not enough patterns matched in parallel stream response"
-        
-        logger.info(f"✅ Parallel function calling stream test passed - Contains multiple calculation results, Stream chunks: {content_chunks_received}")
+        await retry_on_rate_limit(_run_test)
     
     @pytest.mark.asyncio
     async def test_background_tasks_chat(self, gemini_client):
         """Test background tasks (fire-and-forget) - chat method with direct variable verification"""
-        # Rate limiting delay
-        await asyncio.sleep(10)
         
-        # Reset the test variable before starting
-        global background_task_executed
-        background_task_executed = None
-        logger.info(f"Reset background_task_executed to: {background_task_executed}")
-        
-        test_data = TEST_CASES["background_tasks"]
-        
-        # Test Chat Method with background tasks
-        chat_input = ILLMInput(
-            system_prompt=test_data["system_prompt"],
-            user_message=test_data["user_message"],
-            background_tasks=test_data["background_tasks"],
-            max_turns=5
-        )
-        
-        chat_response = await gemini_client.chat(chat_input)
-        assert isinstance(chat_response, dict)
-        assert "llm_response" in chat_response
-        chat_result = chat_response["llm_response"]
-        
-        # Convert result to string for basic validation
-        chat_text = str(chat_result)
-        logger.info(f"Background tasks chat result: {chat_text}")
-        
-        # Validate the LLM provided an answer about France (basic response check)
-        assert re.search(r"paris|france", chat_text, re.IGNORECASE), "LLM should answer the question about France"
-        
-        # Give background tasks a moment to complete
-        await asyncio.sleep(0.5)
-        
-        # DIRECT VERIFICATION: Check if the background task actually executed by checking our test variable
-        logger.info(f"Final background_task_executed value: {background_task_executed}")
-        
-        # Verify the background task was executed
-        assert background_task_executed is not None, "Background task should have executed and set the test variable"
-        assert "ADMIN_NOTIFIED" in background_task_executed, "Background task should have set the expected value"
+        async def _run_test():
+            # Rate limiting delay
+            await asyncio.sleep(10)
+            
+            # Reset the test variable before starting
+            global background_task_executed
+            background_task_executed = None
+            logger.info(f"Reset background_task_executed to: {background_task_executed}")
+            
+            test_data = TEST_CASES["background_tasks"]
+            
+            # Test Chat Method with background tasks
+            chat_input = ILLMInput(
+                system_prompt=test_data["system_prompt"],
+                user_message=test_data["user_message"],
+                background_tasks=test_data["background_tasks"],
+                max_turns=5
+            )
+            
+            chat_response = await gemini_client.chat(chat_input)
+            assert isinstance(chat_response, dict)
+            assert "llm_response" in chat_response
+            chat_result = chat_response["llm_response"]
+            
+            # Convert result to string for basic validation
+            chat_text = str(chat_result)
+            logger.info(f"Background tasks chat result: {chat_text}")
+            
+            # Validate the LLM provided an answer about France (basic response check)
+            assert re.search(r"paris|france", chat_text, re.IGNORECASE), "LLM should answer the question about France"
+            
+            # Give background tasks a moment to complete
+            await asyncio.sleep(0.5)
+            
+            # DIRECT VERIFICATION: Check if the background task actually executed by checking our test variable
+            logger.info(f"Final background_task_executed value: {background_task_executed}")
+            
+            # Verify the background task was executed
+            assert background_task_executed is not None, "Background task should have executed and set the test variable"
+            assert "ADMIN_NOTIFIED" in background_task_executed, "Background task should have set the expected value"
 
+            
+            logger.info(f"✅ Background tasks chat test passed - Background task executed: {background_task_executed}")
         
-        logger.info(f"✅ Background tasks chat test passed - Background task executed: {background_task_executed}")
+        await retry_on_rate_limit(_run_test)
 
     @pytest.mark.asyncio
     async def test_background_tasks_stream(self, gemini_client):
         """Test background tasks (fire-and-forget) - stream method with direct variable verification"""
-        # Rate limiting delay
-        await asyncio.sleep(10)
         
-        # Reset the test variable before starting
-        global background_task_executed
-        background_task_executed = None
-        logger.info(f"Reset background_task_executed to: {background_task_executed}")
-        
-        test_data = TEST_CASES["background_tasks"]
-        
-        # Test Stream Method with background tasks
-        stream_input = ILLMInput(
-            system_prompt=test_data["system_prompt"],
-            user_message=test_data["user_message"],
-            background_tasks=test_data["background_tasks"],
-            max_turns=5
-        )
-        
-        stream_chunks = []
-        final_stream_text = ""
-        content_chunks_received = 0
-        
-        async for chunk in gemini_client.stream(stream_input):
-            stream_chunks.append(chunk)
-            logger.info(f"🎯 Background tasks stream chunk: {chunk}")
+        async def _run_test():
+            # Rate limiting delay
+            await asyncio.sleep(10)
             
-            if chunk.get("llm_response") and chunk["llm_response"] is not None:
-                content_chunks_received += 1
-                if isinstance(chunk["llm_response"], str):
-                    final_stream_text = chunk["llm_response"]
+            # Reset the test variable before starting
+            global background_task_executed
+            background_task_executed = None
+            logger.info(f"Reset background_task_executed to: {background_task_executed}")
+            
+            test_data = TEST_CASES["background_tasks"]
+            
+            # Test Stream Method with background tasks
+            stream_input = ILLMInput(
+                system_prompt=test_data["system_prompt"],
+                user_message=test_data["user_message"],
+                background_tasks=test_data["background_tasks"],
+                max_turns=5
+            )
+            
+            stream_chunks = []
+            final_stream_text = ""
+            content_chunks_received = 0
+            
+            async for chunk in gemini_client.stream(stream_input):
+                stream_chunks.append(chunk)
+                logger.info(f"🎯 Background tasks stream chunk: {chunk}")
+                
+                if chunk.get("llm_response") and chunk["llm_response"] is not None:
+                    content_chunks_received += 1
+                    if isinstance(chunk["llm_response"], str):
+                        final_stream_text = chunk["llm_response"]
+            
+            # Validate streaming behavior for background tasks
+            assert len(stream_chunks) > 0, "No stream chunks received"
+            assert content_chunks_received > 0, "No content chunks received from streaming"
+            assert len(final_stream_text) > 0, "No final stream text received"
+            
+            # Validate the LLM provided an answer about France (basic response check)
+            assert re.search(r"paris|france", final_stream_text, re.IGNORECASE), "LLM should answer the question about France"
+            
+            # Give background tasks a moment to complete
+            await asyncio.sleep(0.5)
+            
+            # DIRECT VERIFICATION: Check if the background task actually executed by checking our test variable
+            logger.info(f"Final background_task_executed value: {background_task_executed}")
+            
+            # Verify the background task was executed
+            assert background_task_executed is not None, "Background task should have executed and set the test variable"
+            assert "ADMIN_NOTIFIED" in background_task_executed, "Background task should have set the expected value"
+            assert "User interaction" in background_task_executed, "Background task should include the expected event details"
+            
+            logger.info(f"✅ Background tasks stream test passed - Background task executed: {background_task_executed}, Stream chunks: {content_chunks_received}")
         
-        # Validate streaming behavior for background tasks
-        assert len(stream_chunks) > 0, "No stream chunks received"
-        assert content_chunks_received > 0, "No content chunks received from streaming"
-        assert len(final_stream_text) > 0, "No final stream text received"
-        
-        # Validate the LLM provided an answer about France (basic response check)
-        assert re.search(r"paris|france", final_stream_text, re.IGNORECASE), "LLM should answer the question about France"
-        
-        # Give background tasks a moment to complete
-        await asyncio.sleep(0.5)
-        
-        # DIRECT VERIFICATION: Check if the background task actually executed by checking our test variable
-        logger.info(f"Final background_task_executed value: {background_task_executed}")
-        
-        # Verify the background task was executed
-        assert background_task_executed is not None, "Background task should have executed and set the test variable"
-        assert "ADMIN_NOTIFIED" in background_task_executed, "Background task should have set the expected value"
-        assert "User interaction" in background_task_executed, "Background task should include the expected event details"
-        
-        logger.info(f"✅ Background tasks stream test passed - Background task executed: {background_task_executed}, Stream chunks: {content_chunks_received}")
+        await retry_on_rate_limit(_run_test)
     
     @pytest.mark.asyncio
     async def test_usage_tracking(self, gemini_client):
