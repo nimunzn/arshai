@@ -7,7 +7,7 @@ from contextlib import contextmanager, asynccontextmanager
 # OpenTelemetry imports with fallbacks
 try:
     from opentelemetry import trace
-    from opentelemetry.trace import Span, Status, StatusCode, Tracer
+    from opentelemetry.trace import Span, Status, StatusCode, Tracer, SpanKind
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -18,6 +18,7 @@ except ImportError:
 
 from .config import ObservabilityConfig
 from .metrics import MetricsCollector, TimingData
+from .phoenix_client import PhoenixClient
 
 
 class ObservabilityManager:
@@ -30,6 +31,7 @@ class ObservabilityManager:
         # Initialize components
         self.metrics_collector: Optional[MetricsCollector] = None
         self.tracer: Optional[Tracer] = None
+        self.phoenix_client: Optional[PhoenixClient] = None
         
         self._initialize_components()
         
@@ -44,6 +46,10 @@ class ObservabilityManager:
         # Initialize tracing
         if self.config.trace_requests and OTEL_AVAILABLE:
             self._initialize_tracing()
+        
+        # Initialize Phoenix AI observability
+        if self.config.phoenix_enabled:
+            self.phoenix_client = PhoenixClient(self.config)
     
     def _initialize_tracing(self):
         """Initialize OpenTelemetry tracing."""
@@ -108,6 +114,7 @@ class ObservabilityManager:
                         provider: str, 
                         model: str, 
                         method_name: str = "llm_call",
+                        system: Optional[str] = None,
                         **extra_attributes):
         """Non-intrusive context manager for observing LLM calls.
         
@@ -125,10 +132,16 @@ class ObservabilityManager:
         # Create span attributes
         span_attributes = {
             "llm.provider": provider,
-            "llm.model": model,
+            "llm.model_name": model,  # Renamed to match OpenInference
             "llm.method": method_name,
         }
+        
+        # Add system if provided
+        if system:
+            span_attributes["llm.system"] = system
         span_attributes.update(self.config.custom_attributes)
+        
+        # Add remaining extra attributes
         span_attributes.update(extra_attributes)
         
         # Start tracing if enabled
@@ -187,6 +200,7 @@ class ObservabilityManager:
                                        provider: str,
                                        model: str, 
                                        method_name: str = "stream_llm_call",
+                                       system: Optional[str] = None,
                                        **extra_attributes):
         """Non-intrusive async context manager for observing streaming LLM calls.
         
@@ -204,11 +218,17 @@ class ObservabilityManager:
         # Create span attributes
         span_attributes = {
             "llm.provider": provider,
-            "llm.model": model,
+            "llm.model_name": model,  # Renamed to match OpenInference
             "llm.method": method_name,
             "llm.streaming": True,
         }
+        
+        # Add system if provided
+        if system:
+            span_attributes["llm.system"] = system
         span_attributes.update(self.config.custom_attributes)
+        
+        # Add remaining extra attributes
         span_attributes.update(extra_attributes)
         
         # Start tracing if enabled
@@ -279,13 +299,48 @@ class ObservabilityManager:
             
             span.set_attribute("llm.total_duration", timing_data.total_duration)
             
-            # Token counts
+            # Token counts - renamed to match OpenInference
             if timing_data.prompt_tokens > 0:
-                span.set_attribute("llm.usage.prompt_tokens", timing_data.prompt_tokens)
+                span.set_attribute("llm.token_count.prompt", timing_data.prompt_tokens)
             if timing_data.completion_tokens > 0:
-                span.set_attribute("llm.usage.completion_tokens", timing_data.completion_tokens)
+                span.set_attribute("llm.token_count.completion", timing_data.completion_tokens)
             if timing_data.total_tokens > 0:
-                span.set_attribute("llm.usage.total_tokens", timing_data.total_tokens)
+                span.set_attribute("llm.token_count.total", timing_data.total_tokens)
+            
+            # Additional OpenInference attributes
+            if hasattr(timing_data, 'input_value') and timing_data.input_value:
+                span.set_attribute("input.value", timing_data.input_value)
+            
+            if hasattr(timing_data, 'output_value') and timing_data.output_value:
+                span.set_attribute("output.value", timing_data.output_value)
+            
+            if hasattr(timing_data, 'input_mime_type'):
+                span.set_attribute("input.mime_type", timing_data.input_mime_type)
+            
+            if hasattr(timing_data, 'output_mime_type'):
+                span.set_attribute("output.mime_type", timing_data.output_mime_type)
+            
+            if hasattr(timing_data, 'input_messages') and timing_data.input_messages:
+                span.set_attribute("llm.input_messages", str(timing_data.input_messages))
+            
+            if hasattr(timing_data, 'output_messages') and timing_data.output_messages:
+                span.set_attribute("llm.output_messages", str(timing_data.output_messages))
+            
+            if hasattr(timing_data, 'invocation_parameters') and timing_data.invocation_parameters:
+                span.set_attribute("llm.invocation_parameters", str(timing_data.invocation_parameters))
+            
+            if hasattr(timing_data, 'function_call') and timing_data.function_call:
+                span.set_attribute("llm.function_call", str(timing_data.function_call))
+            
+            # Cost tracking
+            if hasattr(timing_data, 'prompt_cost') and timing_data.prompt_cost is not None:
+                span.set_attribute("llm.cost.prompt", timing_data.prompt_cost)
+            
+            if hasattr(timing_data, 'completion_cost') and timing_data.completion_cost is not None:
+                span.set_attribute("llm.cost.completion", timing_data.completion_cost)
+            
+            if hasattr(timing_data, 'total_cost') and timing_data.total_cost is not None:
+                span.set_attribute("llm.cost.total", timing_data.total_cost)
                 
         except Exception as e:
             self.logger.warning(f"Failed to update span with timing: {e}")
@@ -354,6 +409,10 @@ class ObservabilityManager:
                 tracer_provider = trace.get_tracer_provider()
                 if hasattr(tracer_provider, 'shutdown'):
                     tracer_provider.shutdown()
+            
+            # Shutdown Phoenix client
+            if self.phoenix_client:
+                self.phoenix_client.shutdown()
             
             self.logger.info("Observability manager shutdown completed")
         except Exception as e:

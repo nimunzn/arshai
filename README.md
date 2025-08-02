@@ -126,7 +126,7 @@ Connects to large language models through a unified interface:
 
 #### Observability System
 
-Production-ready monitoring and instrumentation for AI systems with OpenTelemetry integration:
+Production-ready monitoring and instrumentation for AI systems with comprehensive observability stack:
 
 **Key Metrics (Zero-Fallback Monitoring)**:
 - `llm_time_to_first_token_seconds` - Latency from request start to first token
@@ -136,10 +136,11 @@ Production-ready monitoring and instrumentation for AI systems with OpenTelemetr
 
 **Enterprise Features**:
 - **OpenTelemetry Native**: Export to Jaeger, Prometheus, Datadog, New Relic, any OTLP backend
-- **LLM Usage Data Integration**: Direct usage from LLM responses for accurate token counts
+- **Phoenix AI Observability**: Advanced LLM interaction monitoring with input/output tracing
+- **Automatic Factory Integration**: Zero-code observability through smart factory wrapping
+- **Real-time Input/Output Capture**: Automatic capture of prompts, responses, and usage metrics
 - **Streaming Observability**: Real-time token-level timing for streaming responses
 - **Non-Intrusive Design**: Zero side effects on LLM calls with graceful degradation
-- **Factory Integration**: Automatic instrumentation through LLMFactory
 - **YAML Configuration**: Production-ready configuration management
 - **Privacy Controls**: Configurable prompt/response logging with length limits
 - **Performance Optimization**: Async methods for high-throughput scenarios
@@ -454,6 +455,9 @@ Arshai provides enterprise-grade observability for production AI systems with co
 
 - **Zero-Fallback Monitoring**: Always capture the 4 critical LLM metrics without any fallback mechanisms
 - **OpenTelemetry Native**: Export to any OTLP-compatible backend (Jaeger, Prometheus, Datadog, New Relic)
+- **Phoenix AI Observability**: Advanced LLM interaction monitoring with comprehensive input/output tracing
+- **Automatic Factory Integration**: Zero-code observability through intelligent factory wrapping
+- **Real-time Input/Output Capture**: Automatic capture of prompts, responses, and usage metrics
 - **LLM Usage Data Integration**: Accurate token counting from LLM response usage data
 - **Streaming Observability**: Real-time token-level timing for streaming responses
 - **Non-Intrusive Design**: Zero side effects on LLM calls with graceful degradation
@@ -474,15 +478,30 @@ Every LLM interaction automatically captures these critical performance metrics:
 
 ```mermaid
 graph TD
-    A[LLM Calls] --> B[Observability Manager]
-    B --> C[Metrics Collector]
-    B --> D[Trace Exporter]
-    C --> E[OpenTelemetry Collector]
-    D --> E
-    E --> F[Jaeger/Zipkin]
-    E --> G[Prometheus]
-    E --> H[DataDog/New Relic]
-    G --> I[Grafana Dashboards]
+    A[LLM Calls] --> B[Observable Factory]
+    B --> C[Observability Manager]
+    C --> D[Metrics Collector]
+    C --> E[Trace Exporter]
+    C --> F[Phoenix Client]
+    D --> G[OpenTelemetry Collector]
+    E --> G
+    F --> H[Phoenix AI Platform]
+    G --> I[Jaeger/Zipkin]
+    G --> J[Prometheus]
+    G --> K[DataDog/New Relic]
+    J --> L[Grafana Dashboards]
+    
+    subgraph "Automatic Capture"
+        M[Input Messages]
+        N[Output Responses]
+        O[Token Usage]
+        P[Timing Data]
+    end
+    
+    B --> M
+    B --> N
+    B --> O
+    B --> P
 ```
 
 ### 🚀 Quick Setup
@@ -495,38 +514,64 @@ observability:
   service_name: "my-ai-service"
   track_token_timing: true
   otlp_endpoint: "http://localhost:4317"
+  
+  # Phoenix AI Observability
+  phoenix_enabled: true
+  phoenix_endpoint: "http://localhost:6006"
+  
+  # Privacy and data capture
+  log_prompts: true
+  log_responses: true
 ```
 
-#### 2. Factory Integration
+#### 2. Automatic Factory Integration
 
 ```python
-from src.factories.llm_factory import LLMFactory
-from arshai.observability import ObservabilityConfig
+from arshai.config.settings import Settings
+from arshai.core.interfaces.illm import ILLMInput
 
-config = ObservabilityConfig.from_yaml("config.yaml")
-client = LLMFactory.create_with_observability(
-    provider="openai",
-    config=llm_config,
-    observability_config=config
+# Settings automatically detects observability configuration
+settings = Settings()
+
+# Create LLM - observability is automatically enabled if configured
+llm = settings.create_llm()  
+
+# All calls are automatically instrumented with zero configuration
+input_data = ILLMInput(
+    system_prompt="You are a helpful assistant.",
+    user_message="Hello!"
 )
 
-# All calls automatically instrumented
-response = client.chat_completion(input_data)
+response = llm.chat_completion(input_data)
+
+# Automatic capture includes:
+# ✅ Input messages (system prompt + user message)
+# ✅ Output response (full LLM response)
+# ✅ Usage metrics (prompt/completion/total tokens)
+# ✅ Timing data (first token, last token, total duration)
+# ✅ Invocation parameters (model, temperature, provider)
+# ✅ Span naming (llm.chat_completion not llm.<lambda>)
 ```
 
 #### 3. Verify Data Collection
 
 ```bash
-# Start observability stack
+# Start complete observability stack
 cd tests/e2e/observability/
 docker-compose up -d
 
-# View metrics: http://localhost:9090
-# View traces: http://localhost:16686
-# View dashboards: http://localhost:3000
+# Access observability platforms:
+# Phoenix AI Platform: http://localhost:6006 (LLM interactions, input/output tracing)
+# Jaeger Traces: http://localhost:16686 (distributed tracing)
+# Prometheus Metrics: http://localhost:9090 (metrics and queries)
+# Grafana Dashboards: http://localhost:3000 (visualization)
 ```
 
 ### 📈 Supported Backends
+
+#### AI Observability Platforms
+- **Phoenix AI Platform**: Advanced LLM interaction monitoring with input/output tracing
+- **Arize AI**: Enterprise LLM observability and evaluation platform
 
 #### Metrics Backends
 - **Prometheus** + Grafana

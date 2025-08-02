@@ -60,15 +60,17 @@ opentelemetry-api = {version = "^1.20.0", optional = true}
 opentelemetry-sdk = {version = "^1.20.0", optional = true}
 opentelemetry-exporter-otlp-proto-grpc = {version = "^1.20.0", optional = true}
 opentelemetry-exporter-otlp-proto-http = {version = "^1.20.0", optional = true}
+arize-phoenix = {version = "^11.18.0", optional = true}
+openinference-semantic-conventions = {version = "^0.1.21", optional = true}
 
 [tool.poetry.extras]
 redis = ["redis"]
 milvus = ["pymilvus"]
 rerankers = ["flashrank"]
 gemini = ["google-genai", "google-auth"]
-observability = ["opentelemetry-api", "opentelemetry-sdk", "opentelemetry-exporter-otlp-proto-grpc", "opentelemetry-exporter-otlp-proto-http"]
+observability = ["opentelemetry-api", "opentelemetry-sdk", "opentelemetry-exporter-otlp-proto-grpc", "opentelemetry-exporter-otlp-proto-http", "arize-phoenix", "openinference-semantic-conventions"]
 docs = ["sphinx", "sphinx-rtd-theme", "sphinx-autodoc-typehints", "myst-parser", "sphinx-copybutton", "sphinxcontrib-mermaid", "furo"]
-all = ["redis", "pymilvus", "flashrank", "google-genai", "google-auth", "opentelemetry-api", "opentelemetry-sdk", "opentelemetry-exporter-otlp-proto-grpc", "opentelemetry-exporter-otlp-proto-http"]
+all = ["redis", "pymilvus", "flashrank", "google-genai", "google-auth", "opentelemetry-api", "opentelemetry-sdk", "opentelemetry-exporter-otlp-proto-grpc", "opentelemetry-exporter-otlp-proto-http", "arize-phoenix", "openinference-semantic-conventions"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.0.0"

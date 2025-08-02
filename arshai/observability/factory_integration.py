@@ -110,13 +110,40 @@ class ObservableFactory:
                             setattr(self, attr_name, attr_value)
             
             def __getattr__(self, name):
-                attr = getattr(self._wrapped, name)
-                
-                # If it's one of the LLM methods, wrap it with observability
+                # If it's one of the LLM methods, create a wrapper
                 if name in ['chat_completion', 'chat_with_tools', 'stream_completion', 'stream_with_tools']:
-                    return with_observability(self._provider, self._observability_manager)(attr)
+                    # Get the original method
+                    original_method = getattr(self._wrapped, name)
+                    
+                    # Create a wrapper that properly handles the bound method
+                    def method_wrapper(llm_input, *args, **kwargs):
+                        # Create a temporary wrapper class that has the required attributes
+                        class TempWrapper:
+                            def __init__(self, wrapped_instance):
+                                self.config = wrapped_instance.config if hasattr(wrapped_instance, 'config') else None
+                        
+                        temp_instance = TempWrapper(self._wrapped)
+                        
+                        # Create a properly named function instead of lambda
+                        def observable_func(self, llm_input, *a, **kw):
+                            return original_method(llm_input, *a, **kw)
+                        
+                        # Set the function name to match the original method
+                        observable_func.__name__ = name
+                        
+                        # Create the observable version
+                        observable_method = with_observability(
+                            self._provider, 
+                            self._observability_manager
+                        )(observable_func)
+                        
+                        # Call it with the temp instance
+                        return observable_method(temp_instance, llm_input, *args, **kwargs)
+                    
+                    return method_wrapper
                 
-                return attr
+                # For other attributes, return as normal
+                return getattr(self._wrapped, name)
         
         return ObservableWrapper(instance, provider, self.observability_manager)
     

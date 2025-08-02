@@ -1,6 +1,6 @@
 # Arshai Observability System
 
-A comprehensive, non-intrusive observability layer for the Arshai LLM framework. This system provides production-ready monitoring, metrics collection, and tracing for LLM interactions with automatic provider detection and token-level performance analysis.
+A comprehensive, non-intrusive observability layer for the Arshai LLM framework with Phoenix AI integration. This system provides production-ready monitoring, metrics collection, and tracing for LLM interactions with automatic input/output capture, provider detection, and token-level performance analysis.
 
 ## 🚀 Key Features
 
@@ -11,24 +11,27 @@ A comprehensive, non-intrusive observability layer for the Arshai LLM framework.
 - ✅ **`llm_completion_tokens`** - Count of completion tokens generated
 
 ### Advanced Features
-- **Non-Intrusive Design**: Zero side effects on LLM calls
+- **Phoenix AI Integration**: Advanced LLM interaction monitoring with comprehensive input/output tracing
+- **Automatic Factory Integration**: Zero-code observability through intelligent factory wrapping
+- **Real-time Input/Output Capture**: Automatic capture of prompts, responses, and usage metrics
+- **Non-Intrusive Design**: Zero side effects on LLM calls with graceful degradation
 - **Automatic Provider Detection**: Works with OpenAI, Azure, Anthropic, Google Gemini
 - **YAML Configuration Support**: Configure via `config.yaml` as per Arshai patterns
-- **Factory Integration**: Seamless integration with `LLMFactory`
-- **Token Counting**: Pre-call token estimation using provider-specific libraries
-- **Streaming Support**: Token-level timing for streaming responses
+- **Streaming Support**: Token-level timing for streaming responses with automatic capture
 - **OpenTelemetry Compatible**: Full OTLP export support
+- **Proper Span Naming**: Correct span names like `llm.chat_completion` instead of `llm.<lambda>`
 
 ## 📁 Architecture
 
 ```
 arshai/observability/
 ├── __init__.py                 # Main exports
-├── config.py                   # YAML configuration support
-├── core.py                     # ObservabilityManager
+├── config.py                   # YAML configuration support with Phoenix
+├── core.py                     # ObservabilityManager with Phoenix client
 ├── metrics.py                  # MetricsCollector with key metrics
-├── factory_integration.py     # LLMFactory integration
-├── decorators.py               # Non-intrusive decorators
+├── factory_integration.py     # Automatic LLMFactory integration
+├── decorators.py               # Auto-capture decorators
+├── phoenix_client.py           # Phoenix AI platform integration
 └── README.md                   # This file
 ```
 
@@ -40,6 +43,12 @@ The observability system is included with Arshai but requires optional dependenc
 # Install OpenTelemetry dependencies
 pip install opentelemetry-api opentelemetry-sdk
 pip install opentelemetry-exporter-otlp-proto-grpc
+
+# Install Phoenix AI observability
+pip install arize-phoenix openinference-semantic-conventions
+
+# Or install all observability features
+pip install arshai[observability]
 ```
 
 ## ⚡ Quick Start
@@ -51,47 +60,64 @@ Create `config.yaml`:
 ```yaml
 # config.yaml
 llm:
-  provider: openai
-  model: gpt-4
+  provider: azure  # or openai, anthropic, google
+  model: gpt-4.1-mini
   temperature: 0.7
 
 observability:
-  track_token_timing: true
+  # Service identification
   service_name: "my-arshai-app"
   environment: "production"
   
-  # Privacy controls
-  log_prompts: false
-  log_responses: false
+  # Core observability features
+  trace_requests: true
+  collect_metrics: true
+  track_token_timing: true
   
-  # Optional: OTLP export
-  # otlp_endpoint: "http://localhost:4317"
+  # Phoenix AI Platform integration
+  phoenix_enabled: true
+  phoenix_endpoint: "http://localhost:6006"
+  
+  # OpenTelemetry export
+  otlp_endpoint: "http://localhost:4317"
+  
+  # Privacy controls for input/output capture
+  log_prompts: true   # Enable for development
+  log_responses: true # Enable for development
+  max_prompt_length: 1000
+  max_response_length: 1000
 ```
 
-### 2. Basic Usage with Factory
+### 2. Zero-Configuration Usage (NEW!)
 
 ```python
-from arshai.core.interfaces.illm import ILLMConfig, ILLMInput
-from src.factories.llm_factory import LLMFactory
+from arshai.config.settings import Settings
+from arshai.core.interfaces.illm import ILLMInput
 
-# Configure LLM
-llm_config = ILLMConfig(model="gpt-3.5-turbo", temperature=0.7)
+# Settings automatically detects observability configuration
+settings = Settings()  # Loads config.yaml automatically
 
-# Create with automatic observability
-client = LLMFactory.create_with_observability(
-    provider="openai",
-    config=llm_config,
-    config_path="config.yaml"  # Optional
-)
+# Create LLM - observability is automatically enabled if configured
+llm = settings.create_llm()
 
-# Use normally - observability is automatic!
+# All calls are automatically instrumented with ZERO configuration required!
 input_data = ILLMInput(
-    system_prompt="You are a helpful assistant.",
-    user_message="What is machine learning?"
+    system_prompt="You are a helpful assistant with expertise in AI.",
+    user_message="What are the benefits of distributed tracing in microservices?"
 )
 
-response = client.chat_completion(input_data)
+response = llm.chat_completion(input_data)
 print(response['llm_response'])
+
+# 🎉 Automatic capture includes:
+# ✅ Input messages (system prompt + user message)  
+# ✅ Output response (complete LLM response)
+# ✅ Usage metrics (prompt/completion/total tokens)
+# ✅ Timing data (first token, last token, total duration)
+# ✅ Invocation parameters (model, temperature, provider)
+# ✅ Proper span naming (llm.chat_completion)
+# ✅ Phoenix AI Platform integration
+# ✅ OpenTelemetry export to Jaeger/Prometheus
 ```
 
 ### 3. Environment Variables
@@ -119,15 +145,27 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 - `llm_tokens_total`: Total token count
 - `llm_tokens_per_second`: Token generation throughput
 
-### Span Attributes
+### Span Attributes (OpenInference Compatible)
 - `llm.provider`: LLM provider name
-- `llm.model`: Model name
+- `llm.model_name`: Model name (renamed from llm.model)
+- `llm.system`: AI system identifier (openai, anthropic, etc.)
 - `llm.time_to_first_token`: Time to first token (seconds)
 - `llm.time_to_last_token`: Time to last token (seconds)
 - `llm.duration_first_to_last_token`: Duration between tokens (seconds)
-- `llm.usage.prompt_tokens`: Prompt token count
-- `llm.usage.completion_tokens`: Completion token count
-- `llm.usage.total_tokens`: Total token count
+- `llm.token_count.prompt`: Prompt token count (renamed from llm.usage.prompt_tokens)
+- `llm.token_count.completion`: Completion token count (renamed from llm.usage.completion_tokens)
+- `llm.token_count.total`: Total token count (renamed from llm.usage.total_tokens)
+- `input.value`: Input content
+- `output.value`: Output content
+- `input.mime_type`: Input format
+- `output.mime_type`: Output format
+- `llm.input_messages`: Input messages for chat APIs
+- `llm.output_messages`: Output messages from LLM
+- `llm.invocation_parameters`: Model parameters (temperature, max_tokens, etc.)
+- `llm.function_call`: Function call details
+- `llm.cost.prompt`: Cost for input tokens
+- `llm.cost.completion`: Cost for output tokens
+- `llm.cost.total`: Total cost
 
 ## 🏭 Factory Integration
 
@@ -176,7 +214,6 @@ observability:
   environment: "production"
   
   # Key feature: Token timing
-  track_token_timing: true
   
   # Privacy controls
   log_prompts: false      # Never enable in production
