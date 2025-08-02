@@ -12,7 +12,8 @@ from .config import ObservabilityConfig
 
 def with_observability(provider: str, 
                       observability_manager: Optional[ObservabilityManager] = None,
-                      config: Optional[ObservabilityConfig] = None):
+                      config: Optional[ObservabilityConfig] = None,
+                      system: Optional[str] = None):
     """Decorator to add observability to LLM methods without side effects.
     
     Args:
@@ -36,25 +37,75 @@ def with_observability(provider: str,
             method_name = func.__name__
             model = getattr(self.config, 'model', 'unknown') if hasattr(self, 'config') else 'unknown'
             
-            # Use observability context manager
-            with manager.observe_llm_call(provider, model, method_name) as timing_data:
+            # Extract input attributes from ILLMInput
+            input_attrs = {}
+            if hasattr(llm_input, 'system_prompt'):
+                input_attrs['system_prompt'] = llm_input.system_prompt
+            if hasattr(llm_input, 'user_message'):
+                input_attrs['user_message'] = llm_input.user_message
+            
+            # Use observability context manager with input attributes
+            with manager.observe_llm_call(provider, model, method_name, system=system, **input_attrs) as timing_data:
                 try:
+                    # Capture input data
+                    timing_data.input_messages = [
+                        {"role": "system", "content": llm_input.system_prompt},
+                        {"role": "user", "content": llm_input.user_message}
+                    ]
+                    timing_data.input_value = f"System: {llm_input.system_prompt}\nUser: {llm_input.user_message}"
+                    
+                    # Capture invocation parameters
+                    if hasattr(self, 'config'):
+                        timing_data.invocation_parameters = {
+                            "model": getattr(self.config, 'model', 'unknown'),
+                            "temperature": getattr(self.config, 'temperature', None),
+                            "max_tokens": getattr(self.config, 'max_tokens', None),
+                            "provider": provider
+                        }
+                    
+                    # Record first token time before making the call
+                    timing_data.record_first_token()
+                    
                     # Call the original method
                     result = func(self, llm_input, *args, **kwargs)
+                    
+                    # Record completion timing (last token)
+                    timing_data.record_token()
+                    
+                    # Capture output data
+                    if isinstance(result, dict) and 'llm_response' in result:
+                        timing_data.output_value = result['llm_response']
+                        timing_data.output_messages = [
+                            {"role": "assistant", "content": result['llm_response']}
+                        ]
                     
                     # Extract usage information if available (non-intrusive)
                     if isinstance(result, dict) and 'usage' in result:
                         usage = result['usage']
                         if usage and hasattr(usage, 'prompt_tokens'):
-                            # For sync methods, we need to run async method in event loop
-                            asyncio.run(manager.record_usage_data(timing_data, {
+                            usage_data = {
                                 'prompt_tokens': getattr(usage, 'prompt_tokens', 0),
                                 'completion_tokens': getattr(usage, 'completion_tokens', 0),
                                 'total_tokens': getattr(usage, 'total_tokens', 0)
-                            }))
-                    
-                    # Record completion timing
-                    timing_data.record_token()
+                            }
+                            # For sync methods, we need to run async method in event loop
+                            try:
+                                # Check if we're already in an event loop
+                                loop = asyncio.get_event_loop()
+                                if loop.is_running():
+                                    # Schedule the coroutine to run in the existing loop
+                                    asyncio.create_task(manager.record_usage_data(timing_data, usage_data))
+                                else:
+                                    # Create a new event loop
+                                    asyncio.run(manager.record_usage_data(timing_data, usage_data))
+                            except RuntimeError:
+                                # If no event loop exists, create one
+                                asyncio.run(manager.record_usage_data(timing_data, usage_data))
+                            
+                            # Also update timing_data directly
+                            timing_data.prompt_tokens = usage_data['prompt_tokens']
+                            timing_data.completion_tokens = usage_data['completion_tokens']
+                            timing_data.total_tokens = usage_data['total_tokens']
                     
                     return result
                     
@@ -77,10 +128,35 @@ def with_observability(provider: str,
             method_name = func.__name__
             model = getattr(self.config, 'model', 'unknown') if hasattr(self, 'config') else 'unknown'
             
-            # Use async observability context manager
-            async with manager.observe_streaming_llm_call(provider, model, method_name) as timing_data:
+            # Extract input attributes from ILLMInput
+            input_attrs = {}
+            if hasattr(llm_input, 'system_prompt'):
+                input_attrs['system_prompt'] = llm_input.system_prompt
+            if hasattr(llm_input, 'user_message'):
+                input_attrs['user_message'] = llm_input.user_message
+            
+            # Use async observability context manager with input attributes
+            async with manager.observe_streaming_llm_call(provider, model, method_name, system=system, **input_attrs) as timing_data:
                 first_token_recorded = False
                 final_usage = None
+                accumulated_response = ""
+                
+                # Capture input data
+                timing_data.input_messages = [
+                    {"role": "system", "content": llm_input.system_prompt},
+                    {"role": "user", "content": llm_input.user_message}
+                ]
+                timing_data.input_value = f"System: {llm_input.system_prompt}\nUser: {llm_input.user_message}"
+                
+                # Capture invocation parameters
+                if hasattr(self, 'config'):
+                    timing_data.invocation_parameters = {
+                        "model": getattr(self.config, 'model', 'unknown'),
+                        "temperature": getattr(self.config, 'temperature', None),
+                        "max_tokens": getattr(self.config, 'max_tokens', None),
+                        "provider": provider,
+                        "streaming": True
+                    }
                 
                 try:
                     async for chunk in func(self, llm_input, *args, **kwargs):
@@ -92,19 +168,37 @@ def with_observability(provider: str,
                         # Record each token
                         timing_data.record_token()
                         
+                        # Accumulate response for output capture
+                        if isinstance(chunk, dict) and 'llm_response' in chunk:
+                            if isinstance(chunk['llm_response'], str):
+                                accumulated_response += chunk['llm_response']
+                        
                         # Check for usage data in the chunk (non-intrusive)
                         if isinstance(chunk, dict) and 'usage' in chunk and chunk['usage']:
                             usage = chunk['usage']
                             if hasattr(usage, 'prompt_tokens'):
-                                # Use async method for recording usage data
-                                await manager.record_usage_data(timing_data, {
+                                usage_data = {
                                     'prompt_tokens': getattr(usage, 'prompt_tokens', 0),
                                     'completion_tokens': getattr(usage, 'completion_tokens', 0),
                                     'total_tokens': getattr(usage, 'total_tokens', 0)
-                                })
+                                }
+                                # Use async method for recording usage data
+                                await manager.record_usage_data(timing_data, usage_data)
+                                
+                                # Also update timing_data directly
+                                timing_data.prompt_tokens = usage_data['prompt_tokens']
+                                timing_data.completion_tokens = usage_data['completion_tokens']
+                                timing_data.total_tokens = usage_data['total_tokens']
                                 final_usage = usage
                         
                         yield chunk
+                    
+                    # Capture final output data
+                    if accumulated_response:
+                        timing_data.output_value = accumulated_response
+                        timing_data.output_messages = [
+                            {"role": "assistant", "content": accumulated_response}
+                        ]
                     
                     # Record final timing if we had tokens
                     if first_token_recorded:
@@ -124,30 +218,34 @@ def with_observability(provider: str,
 
 
 def observable_llm_method(provider: str, 
-                         observability_manager: Optional[ObservabilityManager] = None):
+                         observability_manager: Optional[ObservabilityManager] = None,
+                         system: Optional[str] = None):
     """Simple decorator for making LLM methods observable.
     
     Args:
         provider: LLM provider name
         observability_manager: Optional observability manager instance
+        system: Optional AI system identifier
     """
-    return with_observability(provider, observability_manager)
+    return with_observability(provider, observability_manager, system=system)
 
 
 def create_observable_wrapper(original_method: Callable, 
                             provider: str,
-                            observability_manager: Optional[ObservabilityManager] = None) -> Callable:
+                            observability_manager: Optional[ObservabilityManager] = None,
+                            system: Optional[str] = None) -> Callable:
     """Create an observable wrapper for an existing LLM method.
     
     Args:
         original_method: The original method to wrap
         provider: LLM provider name
         observability_manager: Optional observability manager
+        system: Optional AI system identifier
         
     Returns:
         Wrapped method with observability
     """
-    return with_observability(provider, observability_manager)(original_method)
+    return with_observability(provider, observability_manager, system=system)(original_method)
 
 
 class ObservabilityMixin:

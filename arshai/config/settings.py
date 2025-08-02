@@ -175,6 +175,8 @@ class Settings(ISetting):
         The LLM implementation is responsible for reading sensitive data
         (API keys, endpoints) directly from environment variables.
         
+        If observability is enabled in provider_configs, creates LLM with observability.
+        
         Override this method in a subclass to customize LLM creation.
         
         Returns:
@@ -201,10 +203,63 @@ class Settings(ISetting):
             
         config = ILLMConfig(**config_params)
         
+        # Check if observability is enabled
+        observability_enabled = self._is_observability_enabled(provider)
+        
+        if observability_enabled:
+            try:
+                # Import observability factory integration
+                from ..observability.factory_integration import create_observable_factory
+                from ..observability.config import ObservabilityConfig
+                
+                logger.info(f"Creating LLM with observability for provider: {provider}")
+                
+                # Create observability config from settings
+                observability_config = ObservabilityConfig(**self.get("observability", {}))
+                
+                # Create observable factory
+                observable_factory = create_observable_factory(
+                    base_factory_class=LLMFactory,
+                    observability_config=observability_config
+                )
+                
+                # Create LLM with observability
+                self._llm = observable_factory.create(provider, config)
+                return self._llm
+            except ImportError:
+                logger.warning("Observability dependencies not available, creating LLM without observability")
+            except Exception as e:
+                logger.warning(f"Failed to create LLM with observability: {e}, creating LLM without observability")
+        
         # Create LLM with only structural configuration
         # No sensitive data is passed here
+        logger.info(f"Creating LLM without observability for provider: {provider}")
         self._llm = LLMFactory.create(provider, config)
         return self._llm
+    
+    def _is_observability_enabled(self, provider: str) -> bool:
+        """
+        Check if observability is enabled for the given provider.
+        
+        Args:
+            provider: LLM provider name
+            
+        Returns:
+            True if observability is enabled for the provider
+        """
+        # Check observability configuration
+        observability_config = self.get("observability", {})
+        
+        # Check global observability settings
+        global_enabled = observability_config.get("track_token_timing", False)
+        
+        # Check provider-specific settings
+        provider_configs = observability_config.get("provider_configs", {})
+        provider_config = provider_configs.get(provider, {})
+        provider_enabled = provider_config.get("track_token_timing", False)
+        
+        # Observability is enabled if either global or provider-specific is true
+        return global_enabled or provider_enabled
     
     def create_memory_manager(self) -> IMemoryManager:
         """

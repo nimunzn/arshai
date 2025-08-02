@@ -201,10 +201,59 @@ class Settings(ISetting):
             
         config = ILLMConfig(**config_params)
         
-        # Create LLM with only structural configuration
-        # No sensitive data is passed here
-        self._llm = LLMFactory.create(provider, config)
+        # Check if observability is enabled and available
+        observability_config = self.get("observability")
+        use_observability = (
+            observability_config is not None and
+            self._is_observability_available()
+        )
+        
+        if use_observability:
+            logger.info(f"Creating LLM with observability for provider: {provider}")
+            # Import observability factory only when needed
+            try:
+                from arshai.observability.config import ObservabilityConfig
+                from arshai.observability.factory_integration import ObservableFactory
+                
+                # Create observability config from settings
+                obs_config = ObservabilityConfig(**observability_config)
+                
+                # Create observable factory wrapping the base LLM factory
+                observable_factory = ObservableFactory(
+                    LLMFactory,
+                    observability_config=obs_config
+                )
+                
+                # Create LLM with observability
+                self._llm = observable_factory.create(provider, config)
+                
+            except ImportError as e:
+                logger.warning(f"Observability not available: {e}")
+                logger.info(f"Creating LLM without observability for provider: {provider}")
+                self._llm = LLMFactory.create(provider, config)
+        else:
+            logger.info(f"Creating LLM without observability for provider: {provider}")
+            # Create LLM with only structural configuration
+            # No sensitive data is passed here
+            self._llm = LLMFactory.create(provider, config)
+            
         return self._llm
+    
+    def _is_observability_available(self) -> bool:
+        """
+        Check if observability dependencies are available.
+        
+        Returns:
+            bool: True if observability can be used, False otherwise
+        """
+        try:
+            # Try to import key observability modules
+            from arshai.observability.config import ObservabilityConfig
+            from arshai.observability.factory_integration import ObservableFactory
+            from arshai.observability.core import ObservabilityManager
+            return True
+        except ImportError:
+            return False
     
     def create_memory_manager(self) -> IMemoryManager:
         """
