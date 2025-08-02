@@ -592,9 +592,104 @@ The architecture currently emphasizes:
 - Multiple integration points for LLMs and tools
 - Comprehensive document processing capabilities
 
+### Observability System
+
+The Observability System provides comprehensive monitoring and instrumentation for production AI applications, with a focus on LLM performance tracking and OpenTelemetry integration.
+
+```mermaid
+classDiagram
+    class IObservabilityManager {
+        <<interface>>
+        +observe_llm_call(provider, model, method) ContextManager
+        +observe_streaming_llm_call(provider, model, method) AsyncContextManager
+        +pre_call_token_count(provider, model, messages) TokenCountResult
+        +process_streaming_chunk(provider, model, chunk, timing) UsageData
+    }
+    
+    class ObservabilityManager {
+        -config: ObservabilityConfig
+        -metrics_collector: MetricsCollector
+        -tracer: Tracer
+        -token_counter_factory: TokenCounterFactory
+        +observe_llm_call(provider, model, method) ContextManager
+        +observe_streaming_llm_call(provider, model, method) AsyncContextManager
+        +pre_call_token_count(provider, model, messages) TokenCountResult
+        +process_streaming_chunk(provider, model, chunk, timing) UsageData
+    }
+    
+    class MetricsCollector {
+        -meter: Meter
+        -config: ObservabilityConfig
+        +record_llm_request(provider, model, timing) None
+        +record_token_metrics(timing_data) None
+        +record_error(provider, model, error) None
+    }
+    
+    class TokenCounterFactory {
+        +create_counter(provider, model) BaseTokenCounter
+        +register_counter(provider, counter_class) None
+        +get_supported_providers() List[str]
+    }
+    
+    class BaseTokenCounter {
+        <<abstract>>
+        +count_tokens(messages) TokenCountResult
+        +count_streaming_tokens(content) int
+        +extract_usage_from_stream_chunk(chunk) UsageData
+        +supports_usage_api() bool
+    }
+    
+    IObservabilityManager <|.. ObservabilityManager
+    ObservabilityManager --> MetricsCollector
+    ObservabilityManager --> TokenCounterFactory
+    TokenCounterFactory --> BaseTokenCounter
+```
+
+| Component | Responsibility |
+|-----------|----------------|
+| Observability Manager | Coordinates monitoring activities and provides context managers |
+| Metrics Collector | Collects and exports metrics using OpenTelemetry |
+| Token Counter Factory | Creates provider-specific token counting implementations |
+| Token Counters | Handle accurate token counting for different LLM providers |
+| Timing Data | Tracks token-level timing metrics for streaming responses |
+
+#### Key Metrics
+
+The system provides four core metrics for LLM performance monitoring:
+
+- **`llm_time_to_first_token_seconds`**: Time from request start to first token
+- **`llm_time_to_last_token_seconds`**: Time from request start to last token  
+- **`llm_duration_first_to_last_token_seconds`**: Duration from first token to last token
+- **`llm_completion_tokens`**: Count of completion tokens generated
+
+#### Provider Support
+
+- **OpenAI/Azure**: Uses `tiktoken` for accurate token counting + API usage data
+- **Anthropic**: Uses native token counting API with event-based streaming
+- **Google Gemini**: Uses native token counting API with content-based streaming
+- **OpenRouter**: Uses OpenAI-compatible API with estimation fallbacks
+
+#### Integration Patterns
+
+The observability system integrates seamlessly with the existing architecture:
+
+```python
+# Factory Integration
+client = LLMFactory.create_with_observability(
+    provider="openai",
+    config=llm_config,
+    observability_config=obs_config
+)
+
+# Manual Integration
+with obs_manager.observe_llm_call("openai", "gpt-4") as timing:
+    response = llm_client.chat_completion(input_data)
+    # Metrics automatically collected
+```
+
 ### Future Directions
 Planned architectural enhancements include:
 - Enhanced distributed processing capabilities
 - Improved scaling for high-volume scenarios
 - Advanced caching strategies for performance optimization
-- Expanded observability and monitoring integrations 
+- Extended observability backends and custom metric exporters 

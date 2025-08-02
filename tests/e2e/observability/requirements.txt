@@ -1,0 +1,25 @@
+# Core observability dependencies
+opentelemetry-api==1.21.0
+opentelemetry-sdk==1.21.0
+
+# OTLP exporters
+opentelemetry-exporter-otlp-proto-grpc==1.21.0
+opentelemetry-exporter-otlp-proto-http==1.21.0
+
+# Auto-instrumentation (optional)
+opentelemetry-instrumentation==0.42b0
+
+# HTTP client for testing
+requests==2.31.0
+
+# gRPC for OTLP connection testing
+grpcio==1.59.3
+
+# Provider-specific token counting libraries (optional)
+tiktoken>=0.5.0  # For OpenAI/Azure
+anthropic>=0.7.0  # For Claude
+google-generativeai>=0.3.0  # For Gemini
+
+# Testing utilities
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
