@@ -96,20 +96,6 @@ class BaseLLMClient(ILLM, ABC):
         has_background_tasks = input.background_tasks and len(input.background_tasks) > 0
         return has_tools or has_background_tasks
 
-    def _prepare_base_context(self, input: ILLMInput) -> str:
-        """
-        Build base conversation context from system prompt and user message.
-        
-        Default implementation that can be overridden for provider-specific formats.
-        
-        Args:
-            input: The LLM input
-            
-        Returns:
-            Formatted conversation context string
-        """
-        return f"{input.system_prompt}\n\nUser: {input.user_message}"
-
     # Standard routing methods
     async def chat(self, input: ILLMInput) -> Dict[str, Any]:
         """

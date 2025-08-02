@@ -152,8 +152,6 @@ class GeminiClient(BaseLLMClient):
         except Exception as e:
             raise Exception(f"Client connection test failed: {str(e)}")
 
-
-
     def _prepare_base_context(self, input: ILLMInput) -> str:
         """
         Build base conversation context from system prompt and user message.
@@ -206,12 +204,42 @@ class GeminiClient(BaseLLMClient):
             input: The original LLM input
             contents: Conversation contents list to update
         """
-        await self._function_orchestrator.process_function_calls_from_response(
+        # Get function execution results from orchestrator
+        execution_results = await self._function_orchestrator.process_function_calls_from_response(
             function_calls,
             input.callable_functions or {},
-            input.background_tasks or {},
-            contents
+            input.background_tasks or {}
         )
+        
+        # Convert results to Gemini content format and add to conversation
+        self._add_function_results_to_contents(execution_results, contents)
+    
+    def _add_function_results_to_contents(self, execution_results: Dict, contents: List[str]) -> None:
+        """
+        Convert function execution results to Gemini content format and add to conversation.
+        
+        Args:
+            execution_results: Results from function orchestrator
+            contents: Gemini contents list to update
+        """
+        # Add background task notifications
+        for bg_message in execution_results.get('background_initiated', []):
+            contents.append(f"Background task initiated: {bg_message}")
+        
+        # Add function results with enhanced context
+        function_results = execution_results.get('function_results', [])
+        function_names = execution_results.get('function_names', [])
+        function_args = execution_results.get('function_args', [])
+        
+        for name, result, args in zip(function_names, function_results, function_args):
+            # Format function result with context for Gemini
+            result_message = f"Function '{name}' called with arguments {args} returned: {result}"
+            contents.append(result_message)
+        
+        # Add completion indicator if functions were executed
+        if function_results:
+            completion_msg = f"All {len(function_results)} function(s) completed. Please provide your response based on these results."
+            contents.append(completion_msg)
 
     def _create_response_schema(self, structure_type: Type[T]) -> Dict[str, Any]:
         """
