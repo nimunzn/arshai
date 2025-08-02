@@ -8,7 +8,7 @@ logic in their respective client files.
 
 from .json_processing import is_json_complete, fix_incomplete_json
 from .usage_tracking import standardize_usage_metadata, accumulate_usage_safely
-from .response_parsing import parse_to_structure
+from .response_parsing import parse_to_structure, convert_typeddict_to_basemodel
 from .function_execution import FunctionOrchestrator
 from .context_preparation import build_enhanced_instructions
 
@@ -20,4 +20,5 @@ __all__ = [
     "parse_to_structure",
     "FunctionOrchestrator",
     "build_enhanced_instructions",
+    "convert_typeddict_to_basemodel",
 ]

@@ -1,13 +1,32 @@
-from openai import AzureOpenAI
-import json
-import os
-from typing import List, Dict, Callable, Any, Optional, TypeVar, Type, Union, Generic, AsyncGenerator
-from arshai.core.interfaces.illm import ILLM, ILLMConfig, ILLMInput, ILLMOutput
-import logging
-import traceback
-T = TypeVar('T')
+"""
+Azure OpenAI implementation of the LLM interface using openai SDK.
+Supports both standard function calling and background tasks with manual tool orchestration.
+Follows the same interface pattern as the Gemini client for consistency.
+"""
 
-class AzureClient(ILLM):
+import os
+import logging
+import json
+import traceback
+import time
+import inspect
+from typing import Dict, Any, TypeVar, Union, AsyncGenerator, List, Tuple
+from openai import AzureOpenAI
+from openai.types.responses import ParsedResponse
+from arshai.core.interfaces.illm import ILLMConfig, ILLMInput
+from arshai.llms.base_llm_client import BaseLLMClient
+from arshai.llms.utils import (
+    is_json_complete,
+    standardize_usage_metadata,
+    accumulate_usage_safely,
+    parse_to_structure,
+    build_enhanced_instructions,
+    convert_typeddict_to_basemodel,
+)
+
+T = TypeVar("T")
+
+class AzureClient(BaseLLMClient):
     """Azure OpenAI implementation of the LLM interface"""
     
     def __init__(self, config: ILLMConfig, azure_deployment: str = None, api_version: str = None):
@@ -19,8 +38,7 @@ class AzureClient(ILLM):
             azure_deployment: Optional deployment name (if not provided, will be read from env)
             api_version: Optional API version (if not provided, will be read from env)
         """
-        self.config = config
-        # Get deployment and API version from params or environment variables
+        # Azure-specific configuration
         self.azure_deployment = azure_deployment or os.environ.get("AZURE_DEPLOYMENT")
         self.api_version = api_version or os.environ.get("AZURE_API_VERSION")
         
@@ -29,547 +47,708 @@ class AzureClient(ILLM):
         
         if not self.api_version:
             raise ValueError("Azure API version is required. Set AZURE_API_VERSION environment variable.")
-            
+        
+        # Initialize base client (handles common setup)
         super().__init__(config)
-        self.logger = logging.getLogger(__name__)
-        # Initialize the client
-        self._client = self._initialize_client()
     
     def _initialize_client(self) -> Any:
-        """Initialize the Azure OpenAI client using environment variables or provided values."""
-        # AzureOpenAI client automatically reads AZURE_OPENAI_API_KEY from environment
+        """
+        Initialize the Azure OpenAI client using environment variables or provided values.
+        
+        Returns:
+            AzureOpenAI client instance
+            
+        Raises:
+            ValueError: If AZURE_OPENAI_API_KEY is not set in environment variables
+        """
+        # Check if API key is available in environment
+        api_key = os.environ.get("AZURE_OPENAI_API_KEY")
+        if not api_key:
+            self.logger.error("Azure OpenAI API key not found in environment variables")
+            raise ValueError(
+                "Azure OpenAI API key not found. Please set AZURE_OPENAI_API_KEY environment variable."
+            )
+        
+        # AzureOpenAI client reads AZURE_OPENAI_API_KEY from environment automatically
         return AzureOpenAI(
             azure_deployment=self.azure_deployment,
             api_version=self.api_version,
         )
     
-    def _create_structure_function(self, structure_type: Type[T]) -> Dict:
-        """Create a function definition from the structure type"""
+    def _python_function_to_openai_tool(self, func, name: str, function_type: str = "tool") -> Dict[str, Any]:
+        """
+        Convert a Python function to OpenAI tool format using function inspection.
         
-        return {
-            "name": structure_type.__name__.lower(),
-            "description": structure_type.__doc__ or f"Create a {structure_type.__name__} response",
-            "parameters": structure_type.model_json_schema()
-        }
+        Args:
+            func: Python callable function
+            name: Function name
+            function_type: "tool" for regular tools, "background_task" for background tasks
+            
+        Returns:
+            Dictionary in OpenAI tool format
+        """
+        try:
+            # Get function signature
+            sig = inspect.signature(func)
+            
+            # Extract description from docstring
+            description = func.__doc__ or f"Execute {name} function"
+            description = description.strip()
+            
+            # Enhance description for background tasks
+            if function_type == "background_task":
+                description = f"BACKGROUND TASK: {description}. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
+            
+            # Build parameters schema
+            properties = {}
+            required = []
+            
+            for param_name, param in sig.parameters.items():
+                # Skip 'self' parameter
+                if param_name == 'self':
+                    continue
+                    
+                # Get parameter type
+                param_type = "string"  # default
+                if param.annotation != inspect.Parameter.empty:
+                    param_type = self._python_type_to_json_schema_type(param.annotation)
+                
+                # Build parameter definition
+                param_def = {
+                    "type": param_type,
+                    "description": f"{param_name} parameter"
+                }
+                
+                # For strict mode, ALL parameters must be in required array
+                # regardless of default values
+                required.append(param_name)
+                
+                # Add default value info to description
+                if param.default != inspect.Parameter.empty:
+                    param_def["description"] += f" (default: {param.default})"
+                
+                properties[param_name] = param_def
+            
+            # Build the function definition (without outer wrapper)
+            return {
+                "name": name,
+                "description": description,
+                "parameters": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
+                    "additionalProperties": False
+                },
+                "strict": True
+            }
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to inspect function {name}: {str(e)}")
+            # Return basic fallback schema
+            description = f"Execute {name} function"
+            if function_type == "background_task":
+                description = f"BACKGROUND TASK: {description}. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
+            
+            return {
+                "name": name,
+                "description": description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": False
+                },
+                "strict": True
+            }
     
-    async def chat_with_tools(
-        self,
-        input:ILLMInput
-    ) ->  Union[ILLMOutput, str]:
+    def _python_type_to_json_schema_type(self, python_type) -> str:
+        """
+        Convert Python type annotations to JSON schema types.
+        
+        Args:
+            python_type: Python type annotation
+            
+        Returns:
+            JSON schema type string
+        """
+        # Handle common types
+        if python_type == str:
+            return "string"
+        elif python_type == int:
+            return "integer"  
+        elif python_type == float:
+            return "number"
+        elif python_type == bool:
+            return "boolean"
+        elif python_type == list or (hasattr(python_type, '__origin__') and python_type.__origin__ == list):
+            return "array"
+        elif python_type == dict or (hasattr(python_type, '__origin__') and python_type.__origin__ == dict):
+            return "object"
+        else:
+            # Default to string for unknown types
+            return "string"
+    
+    def _convert_functions_to_llm_format(
+        self, 
+        functions: Union[List[Dict], Dict[str, Any]], 
+        function_type: str = "tool"
+    ) -> List[Dict]:
+        """
+        Convert functions to OpenAI tool format.
+        
+        Args:
+            functions: Either List of JSON schema tool dictionaries or Dict of callable functions
+            function_type: "tool" for regular tools, "background_task" for background tasks
+            
+        Returns:
+            List of function definition dictionaries in OpenAI format
+        """
+        azure_functions = []
+        
+        # Handle JSON schema tool dictionaries (from tools_list)
+        if isinstance(functions, list):
+            for tool in functions:
+                # Get tool properties
+                description = tool.get("description", "")
+                
+                # Enhance description for background tasks
+                if function_type == "background_task":
+                    description = f"BACKGROUND TASK: {description}. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
+                
+                # Ensure additionalProperties is False for strict mode
+                parameters = tool.get("parameters", {})
+                if isinstance(parameters, dict) and "additionalProperties" not in parameters:
+                    parameters["additionalProperties"] = False
+
+                # Create standardized flat tool format
+                azure_functions.append({
+                    "type": "function",
+                    "name": tool.get("name"),
+                    "description": description,
+                    "parameters": parameters,
+                    "strict": True  # Required for structured output
+                })
+                
+        # Handle callable Python functions (from background_tasks or callable_functions)
+        elif isinstance(functions, dict):
+            for name, callable_func in functions.items():
+                try:
+                    # Use function inspection helper for background tasks
+                    if function_type == "background_task":
+                        function_tool = self._python_function_to_openai_tool(callable_func, name, function_type)
+                        # Add type to create flat structure
+                        function_tool["type"] = "function"
+                        azure_functions.append(function_tool)
+                    else:
+                        # For regular callable functions, use basic parameter extraction
+                        description = callable_func.__doc__ or name
+                        
+                        parameters = {
+                            "type": "object",
+                            "properties": {},
+                            "required": [],
+                            "additionalProperties": False  # Required for strict mode
+                        }
+                        
+                        azure_functions.append({
+                            "type": "function",
+                            "name": name,
+                            "description": description,
+                            "parameters": parameters,
+                            "strict": True  # Required for structured output
+                        })
+                    
+                except Exception as e:
+                    self.logger.warning(f"Failed to convert function {name}: {str(e)}")
+                    continue
+        
+        return azure_functions
+    
+    def _prepare_tools_context(self, input: ILLMInput) -> Tuple[List, str]:
+        """
+        Prepare Azure OpenAI-specific tools and enhanced context instructions.
+        
+        Args:
+            input: The LLM input
+            
+        Returns:
+            Tuple of (azure_tools_list, enhanced_context_instructions)
+        """
+        # Convert tools to Azure OpenAI format using unified method
+        azure_tools = []
+        if input.tools_list and len(input.tools_list) > 0:
+            azure_tools.extend(
+                self._convert_functions_to_llm_format(input.tools_list, function_type="tool")
+            )
+        
+        if input.background_tasks and len(input.background_tasks) > 0:
+            azure_tools.extend(
+                self._convert_functions_to_llm_format(input.background_tasks, function_type="background_task")
+            )
+        
+        # Build enhanced instructions using generic utility
+        enhanced_instructions = build_enhanced_instructions(
+            structure_type=input.structure_type,
+            background_tasks=input.background_tasks
+        )
+        
+        return azure_tools, enhanced_instructions
+
+    def _convert_messages_to_response_input(self, messages: List[Dict]) -> List[Dict]:
+        """
+        Convert OpenAI-style messages to ResponseInputParam format.
+        
+        Args:
+            messages: List of OpenAI-style message dictionaries
+            
+        Returns:
+            List of ResponseInputParam items
+        """
+        response_input = []
+        for message in messages:
+            # Convert to EasyInputMessageParam format
+            response_message = {
+                "type": "message",
+                "role": message["role"],
+                "content": message["content"]
+            }
+            response_input.append(response_message)
+        return response_input
+
+    async def _process_function_calls(self, function_calls, input: ILLMInput, response_input: List[Dict]) -> bool:
+        """
+        Process function calls from LLM response and add results to response_input.
+        Handles both regular tools and background tasks consistently.
+        
+        Args:
+            function_calls: Function calls from LLM response (any format)
+            input: The original LLM input
+            response_input: ResponseInputParam list to append function results to
+            
+        Returns:
+            bool: True if regular tools were processed (continue conversation), False otherwise
+        """
+        if not function_calls:
+            return False
+            
+        # Create function call objects for orchestrator
+        class FunctionCall:
+            def __init__(self, name: str, args: dict):
+                self.name = name
+                self.args = args
+        
+        generic_function_calls = []
+        has_regular_functions = False
+        
+        for func_call in function_calls:
+            # Extract function details (handles both responses.parse and responses.stream formats)
+            if hasattr(func_call, 'arguments'):
+                function_args = json.loads(func_call.arguments) if func_call.arguments else {}
+            else:
+                function_args = {}
+            function_name = func_call.name
+            
+            # Track if we have regular functions (affects continuation logic)
+            if function_name in (input.callable_functions or {}):
+                has_regular_functions = True
+            elif function_name not in (input.background_tasks or {}):
+                self.logger.warning(f"Function {function_name} not found in available functions or background tasks")
+                continue
+                
+            generic_function_calls.append(FunctionCall(name=function_name, args=function_args))
+        
+        if not generic_function_calls:
+            return False
+            
+        # Execute all functions (regular + background) via orchestrator
+        execution_results = await self._function_orchestrator.process_function_calls_from_response(
+            generic_function_calls,
+            input.callable_functions or {},
+            input.background_tasks or {}
+        )
+        
+        # Add results to response_input
+        self._add_function_results_to_response_input(execution_results, response_input, generic_function_calls)
+        
+        self.logger.info(f"Processed {len(generic_function_calls)} function calls, regular tools: {has_regular_functions}")
+        
+        return has_regular_functions
+
+    def _add_function_results_to_response_input(self, execution_results: Dict, response_input: List[Dict], function_calls: List) -> None:
+        """
+        Add function execution results to response_input in responses API format.
+        
+        Args:
+            execution_results: Results from function orchestrator
+            response_input: ResponseInputParam list to append to
+            function_calls: Original function calls with call_id info
+        """
+        # Add function results as FunctionCallOutput items
+        function_results = execution_results.get('function_results', [])
+        function_names = execution_results.get('function_names', [])
+        for (index, (name, result)) in enumerate(zip(function_names, function_results)):
+            function_output = {
+                "type": "message",
+                "role": "user",
+                "content": f"Function '{name}' called with arguments {function_calls[index].args} returned: {result}"
+            }
+            response_input.append(function_output)
+    
+        # Add background task notifications as user messages (if any)
+        for bg_message in execution_results.get('background_initiated', []):
+            response_input.append({
+                "type": "message",
+                "role": "user",
+                "content": f"Background task initiated: {bg_message}"
+            })
+
+        if function_results:
+            completion_msg = f"All {len(function_results)} function(s) completed. Please provide your response based on these results."
+            response_input.append({
+                "type": "message",
+                "role": "user",
+                "content": completion_msg
+            })
+
+    async def _chat_simple(self, input: ILLMInput) -> Dict[str, Any]:
+        """
+        Handle simple chat without tools or background tasks using responses.parse().
+        
+        Args:
+            input: The LLM input
+            
+        Returns:
+            Dict containing the LLM response and usage information
+        """
+        # Build base context in OpenAI format first
         messages = [
             {"role": "system", "content": input.system_prompt},
             {"role": "user", "content": input.user_message}
         ]
         
-        # Add structure function if structure_type is provided
+        # Convert to ResponseInputParam format
+        response_input = self._convert_messages_to_response_input(messages)
+        
+        # Prepare arguments for responses.parse()
+        kwargs = {
+            "model": self.config.model,
+            "input": response_input,
+            "temperature": self.config.temperature,
+            "max_output_tokens": self.config.max_tokens if self.config.max_tokens else None,
+        }
+        
+        # Add text_format for structured output if needed
         if input.structure_type:
-            structure_function = self._create_structure_function(input.structure_type)
-            all_tools = [structure_function] + input.tools_list
-            messages[0]["content"] += f"""\nYou MUST ALWAYS use the {input.structure_type.__name__.lower()} tool/function to format your response.
-                                            Your response ALWAYS MUST be retunrned using the tool, independently of what is the message or response are.
-                                            You MUST ALWAYS CALLING TOOLS FOR RETURNING RESPONSE
-                                            The response Must be in JSON format
-                                            """
-                                            
-            response_format = {"type": "json_object"}
-        else:
-            all_tools = input.tools_list
-            response_format = None
+            kwargs["text_format"] = input.structure_type
         
-        current_turn = 0
-        final_response = None
+        response: ParsedResponse = self._client.responses.parse(**kwargs)
         
-        # Track accumulated usage metrics
-        accumulated_usage = None
-        
-        while current_turn < input.max_turns:
-            self.logger.info(f"Current turn: {current_turn}")
-            try:
-                response = self._client.chat.completions.create(
-                    model=self.config.model,
-                    messages=messages,
-                    functions=all_tools,
-                    function_call="auto",
-                    temperature=self.config.temperature,
-                    response_format=response_format
-                )
-                
-                # Accumulate usage info
-                if hasattr(response, 'usage'):
-                    current_usage = response.usage
-                    self.logger.info(f"Current usage: {current_usage}")
-                    if accumulated_usage is None:
-                        accumulated_usage = current_usage
-                    else:
-                        # Sum the usage metrics
-                        accumulated_usage.prompt_tokens += current_usage.prompt_tokens
-                        accumulated_usage.completion_tokens += current_usage.completion_tokens
-                        accumulated_usage.total_tokens += current_usage.total_tokens
-                
-                message = response.choices[0].message
+        # Process usage metadata
+        usage = None
+        if hasattr(response, "usage") and response.usage:
+            usage = standardize_usage_metadata(response.usage, provider="azure")
 
-                self.logger.info(f"Message: {message}")
-                
-                # If no function call and no structure type required, return content
-                if not message.function_call and message.content:
-                    if not input.structure_type: 
-                        return {"llm_response": message.content, "usage": accumulated_usage}
-                    else:
-                        structure_response = json.loads(message.content)
-                        final_response = input.structure_type(**structure_response)
+        # Handle response based on whether it's structured or not
+        if input.structure_type:
+            # For structured output, extract the parsed content
+            llm_response = None
+            for output_item in response.output:
+                if output_item.type == "message":
+                    for content in output_item.content:
+                        if content.type == "output_text" and hasattr(content, 'parsed'):
+                            llm_response = content.parsed
+                            break
+                    if llm_response:
                         break
-                
-                # Handle function calls
-                if message.function_call:
-                    function_name = message.function_call.name
-                    function_args = json.loads(message.function_call.arguments)
-                    self.logger.info(f"Function name: {function_name}")
-                    # If it's the structure function, validate and create the structured response
-                    
-                    if input.structure_type and function_name == input.structure_type.__name__.lower():
-                        final_response = input.structure_type(**function_args)
-                        break
-
-                    # Handle other tool functions
-                    if function_name in input.callable_functions:
-                        # Use aexecute for async tool execution
-                        role, function_response = await input.callable_functions[function_name](**function_args)
-                        self.logger.debug(f"Function response: {function_response}")
-                        
-                        # Function responses are now in proper content format, use directly
-                        messages.append({
-                            "role": role,
-                            "name": function_name,
-                            "content": function_response
-                        })
-                    else:
-                        raise ValueError(f"Function {function_name} not found in available functions")
-                
-                # Add assistant's message to conversation
-                if message.content:
-                    messages.append({"role": "assistant", "content": message.content})
-                
-                current_turn += 1
-                
-            except Exception as e:
-                self.logger.error(f"Error in chat_with_tools: {str(e)}")
-                self.logger.error(traceback.format_exc())
-                return {"llm_response": f"An error occurred: {str(e)}", "usage": None}
-        
-        if final_response is None:
-            if input.structure_type:
-                try:
-                    # Make one final attempt to get structured response
-                    final_message = {
-                        "role": "system",
-                        "content": f"You must provide a final response using the {input.structure_type.__name__.lower()} function."
-                    }
-                    messages.append(final_message)
-                    
-                    response = self._client.chat.completions.create(
-                        model=self.config.model,
-                        messages=messages,
-                        functions=[self._create_structure_function(input.structure_type)],
-                        function_call={"name": input.structure_type.__name__.lower()},
-                        temperature=self.config.temperature
-                    )
-                    
-                    # Accumulate usage info from final call
-                    if hasattr(response, 'usage'):
-                        current_usage = response.usage
-                        if accumulated_usage is None:
-                            accumulated_usage = current_usage
-                        else:
-                            # Sum the usage metrics
-                            accumulated_usage.prompt_tokens += current_usage.prompt_tokens
-                            accumulated_usage.completion_tokens += current_usage.completion_tokens
-                            accumulated_usage.total_tokens += current_usage.total_tokens
-                    
-                    message = response.choices[0].message
-                    if message.function_call:
-                        function_args = json.loads(message.function_call.arguments)
-                        final_response = input.structure_type(**function_args)
-                    else:
-                        return {"llm_response": "Failed to generate structured response", "usage": accumulated_usage}
-                except Exception as e:
-                    return {"llm_response": f"Failed to generate structured response: {str(e)}", "usage": None}
-            else:
-                return {"llm_response": "Maximum number of function calling turns reached", "usage": accumulated_usage}
-        
-        # Return structured response with usage
-        return {"llm_response": final_response, "usage": accumulated_usage}
-    
-    def chat_completion(
-        self,
-        input:ILLMInput
-    ) -> Union[ILLMOutput, str]:
-        """Process a chat completion request"""
-        try:
-            if input.structure_type:
-                # Create structure function
-                structure_function = self._create_structure_function(input.structure_type)
-                
-                messages = [
-                    {"role": "system", "content": input.system_prompt},
-                    {"role": "user", "content": input.user_message}
-                ]
-                
-                messages[0]["content"] += f"\nYou MUST use the {input.structure_type.__name__.lower()} function to format your response IN JSON FORMAT"
-                
-                response = self._client.chat.completions.create(
-                    model=self.config.model,
-                    messages=messages,
-                    functions=[structure_function],
-                    function_call={"name": input.structure_type.__name__.lower()},
-                    temperature=self.config.temperature,
-                    response_format={"type": "json_object"}
-                )
-                
-                # Get usage info
-                usage = None
-                if hasattr(response, 'usage'):
-                    usage = response.usage
-                
-                message = response.choices[0].message
-                if message.function_call:
-                    function_args = json.loads(message.function_call.arguments)
-                    final_structure = input.structure_type(**function_args)
-                    return {"llm_response": final_structure, "usage": usage}
-                else:
-                    raise ValueError("Model did not provide structured response")
             
+            return {"llm_response": llm_response, "usage": usage}
+        else:
+            # For unstructured output, use the output_text property
+            return {"llm_response": response.output_text, "usage": usage}
 
-            messages = [
+    async def _chat_with_tools(self, input: ILLMInput) -> Dict[str, Any]:
+        """
+        Handle complex chat with tools and/or background tasks using responses.parse().
+        
+        Args:
+            input: The LLM input
+            
+        Returns:
+            Dict containing the LLM response and usage information
+        """
+        # Build base context and prepare tools
+        messages = [
             {"role": "system", "content": input.system_prompt},
             {"role": "user", "content": input.user_message}
-            ]
-                
-            # Simple completion without structure
-            response = self._client.chat.completions.create(
-                model=self.config.model,
-                messages=messages,
-                temperature=self.config.temperature
-            )
-            
-            # Extract usage if available
-            usage = None
-            if hasattr(response, 'usage'):
-                usage = response.usage
-            
-            # If we found no match, just return the raw completion
-            return {"llm_response": response.choices[0].message.content, "usage": usage}
-            
-        except Exception as e:
-            self.logger.error(f"Error in chat_completion: {str(e)}")
-            self.logger.error(traceback.format_exc())
-            return {"llm_response": f"An error occurred: {str(e)}", "usage": None}
+        ]
+        azure_tools, enhanced_instructions = self._prepare_tools_context(input)
+        messages[0]["content"] += enhanced_instructions
+        
+        # Convert to ResponseInputParam format
+        response_input = self._convert_messages_to_response_input(messages)
+        
+        # Handle complex cases with function calling (multi-turn using previous_response_id)
+        current_turn = 0
+        accumulated_usage = None
+        has_regular_functions = False
+        while current_turn < input.max_turns:
+            self.logger.info(f"Current turn: {current_turn}")
 
-    async def stream_with_tools(
-        self,
-        input: ILLMInput
-    ) -> AsyncGenerator[Dict[str, Any], None]:
-        try:
-            messages = [
-                {"role": "system", "content": input.system_prompt},
-                {"role": "user", "content": input.user_message}
-            ]
-            
-            # Add structure function if structure_type is provided
-            if input.structure_type:
-                structure_function = self._create_structure_function(input.structure_type)
-                all_tools = [structure_function] + input.tools_list
-                messages[0]["content"] += f"""\nYou MUST ALWAYS use the {input.structure_type.__name__.lower()} tool/function to format your response.
-                                                Your response ALWAYS MUST be retunrned using the tool, independently of what is the message or response are.
-                                                You MUST ALWAYS CALLING TOOLS FOR RETURNING RESPONSE
-                                                The response Must be in JSON format
-                                                """
-                response_format = {"type": "json_object"}
-            else:
-                all_tools = input.tools_list
-                response_format = None
-            
-            current_turn = 0
-            is_finished = False
-            has_previous_delta = False
-            # Track accumulated usage
-            accumulated_usage = None
+            try:
+                start_time = time.time()
                 
-            while current_turn < input.max_turns:
-                if is_finished:
-                    break
+                # Prepare arguments for responses.parse()
+                kwargs = {
+                    "model": self.config.model,
+                    "temperature": self.config.temperature,
+                    "max_output_tokens": self.config.max_tokens if self.config.max_tokens else None,
+                    "tools": azure_tools if azure_tools else None,
+                    "input": response_input
+                }
+                # Add text_format for structured output if needed
+                if input.structure_type:
+                    kwargs["text_format"] = input.structure_type
                 
-                self.logger.info(f"Current turn: {current_turn}")
-       
-                collected_message = {"content": "", "function_call": None}
-                s = 0
-                for chunk in self._client.chat.completions.create(
-                    model=self.config.model,
-                    messages=messages,
-                    functions=all_tools,
-                    function_call="auto",
-                    temperature=self.config.temperature,
-                    response_format=response_format,
-                    stream=True,
-                    stream_options={"include_usage": True}
-                ):
+                response =  self._client.responses.parse(**kwargs)
+                self.logger.info(f"🔍response time: {time.time() - start_time}")
+                
+                # Process usage metadata safely
+                if hasattr(response, "usage") and response.usage:
+                    current_usage = standardize_usage_metadata(response.usage, provider="azure")
+                    accumulated_usage = accumulate_usage_safely(current_usage, accumulated_usage)
+
+                # Check for function calls in output
+                function_calls = [output_item for output_item in response.output if output_item.type == "function_call"]
+
+                if function_calls:
+                    self.logger.info(f"Turn {current_turn}: Found {len(function_calls)} function calls")
                     
-                    s += 1
-                    
-                    # Handle the case where choices is empty but usage data is present (final usage chunk)
-                    if not chunk.choices and chunk.usage is not None:
-                        self.logger.info(f"Received final usage data: {chunk.usage}")
-                        accumulated_usage = chunk.usage
-                        # Check if we have a complete structured response and this is the end of streaming
-                    if (input.structure_type and 
-                        collected_message.get("function_call") and 
-                        collected_message["function_call"].get("name") == input.structure_type.__name__.lower()):
-                        # We have completed a structured response - end the conversation
-                        is_finished = True                
-                    # Skip chunks without choices
-                    if not chunk.choices:
+                    # Process function calls using unified method
+                    has_regular_functions = await self._process_function_calls(function_calls, input, response_input)
+                    if has_regular_functions:
+                        current_turn += 1
                         continue
-                        
-                    delta = chunk.choices[0].delta
-
-                    # Check if all attributes are None, excluding private/special attributes
-                    if all(getattr(delta, attr) is None for attr in vars(delta) if not attr.startswith('_')):
-                        if has_previous_delta:
-                            # Only finish if we're not expecting more tool calls
-                            # Continue processing if we have partial function calls or if streaming just started
-                            if collected_message.get("function_call") is None and collected_message.get("content", "").strip():
-                                is_finished = True
-                            else:
-                                # We might be in a function call sequence or still building content
-                                has_previous_delta = True
-                        else:
-                            has_previous_delta = True
-
-                    # Handle content streaming
-                    if hasattr(delta, 'content') and delta.content is not None:
-                        collected_message["content"] += delta.content
-                        has_previous_delta = True
-                        if not input.structure_type:
-                            yield {"llm_response": collected_message["content"]}
-                        else:
-                            # Check if JSON is complete and fix if necessary
-                            is_complete, fixed_json = self._is_json_complete(collected_message["content"])
-                            if is_complete:
-                                try:
-                                    final_response = json.loads(fixed_json)
-                                    yield {"llm_response": input.structure_type(**final_response)}
-                                except json.JSONDecodeError:
-                                    continue
-                            else:
-                                continue  # Wait for more chunks if JSON is incomplete
-
-                    # Handle function call streaming
-                    if hasattr(delta, 'function_call'):
-                        if delta.function_call is not None:
-                            if delta.function_call.name or (collected_message["function_call"] and collected_message["function_call"].get("name")):
-                                if collected_message["function_call"] is None:
-                                    collected_message["function_call"] = {"name": "", "arguments": ""}
-                                if delta.function_call.name:
-                                    self.logger.info(f"Function name: {delta.function_call.name}")
-                                    collected_message["function_call"]["name"] += delta.function_call.name
-                                if delta.function_call.arguments:
-                                    collected_message["function_call"]["arguments"] += delta.function_call.arguments
-                                    
-                                    # Try to parse and stream structured response
-                                    if input.structure_type and collected_message["function_call"]["name"] == input.structure_type.__name__.lower():
-                                        
-                                        # Use the safe parsing function
-                                        has_previous_delta = True
-                                        is_complete, fixed_json = self._is_json_complete(collected_message["function_call"]["arguments"])
+                    
+                # Check for structured response
+                if input.structure_type:
+                    llm_response = None
+                    for output_item in response.output:
+                        if output_item.type == "message":
+                            for content in output_item.content:
+                                if content.type == "output_text" and hasattr(content, 'parsed'):
+                                    try:
+                                        llm_response = content.parsed
+                                    except Exception:
+                                        is_complete, fixed_json = is_json_complete(content.text)
                                         if is_complete:
                                             try:
-                                                final_response = json.loads(fixed_json)
-                                                yield {"llm_response": input.structure_type(**final_response)}
-                                            except json.JSONDecodeError:
-                                                continue          
+                                                llm_response = parse_to_structure(fixed_json, input.structure_type)
+                                            except Exception as e:
+                                                self.logger.error(f"Error parsing structured response: {str(e)}")
+                                                llm_response = content.text
+                    
+                    if llm_response is not None:
+                        self.logger.info(f"Turn {current_turn}: Received structured response")
+                        return {"llm_response": llm_response, "usage": accumulated_usage}
+                
+                # Check for text response
+                else:
+                    self.logger.info(f"Turn {current_turn}: Received text response")
+                    self.logger.info(f"🔍response: {response.output_text}")
+                    return {"llm_response": response.output_text, "usage": accumulated_usage}
 
-                                    elif collected_message["function_call"]["name"] != input.structure_type.__name__.lower():
-                                        function_name = collected_message["function_call"]["name"]
-                                        args_str = collected_message["function_call"]["arguments"].strip()
+            except Exception as e:
+                self.logger.error(
+                    f"Error in Azure chat_with_tools turn {current_turn}: {str(e)}"
+                )
+                self.logger.error(traceback.format_exc())
+                return {
+                    "llm_response": f"An error occurred: {str(e)}",
+                    "usage": accumulated_usage,
+                }
 
-                                        if args_str.startswith("{") and args_str.endswith("}"):
-                                            function_args = json.loads(collected_message["function_call"]["arguments"])
-                                            if function_name in input.callable_functions:
-                                                # Use aexecute for async tool execution
-                                                role, function_response = await input.callable_functions[function_name](**function_args)
-                                                self.logger.debug(f"Function {function_name} response: {function_response}")
-                                                
-                                                # Function responses are now in proper content format, use directly
-                                                messages.append({
-                                                    "role": role,
-                                                     "name": function_name,
-                                                    "content": function_response
-                                                })
-                                                
-                                                # Reset collected message for next turn
-                                                collected_message = {"content": "", "function_call": None}
-                                                current_turn += 1
-                                                break  # Break out of the streaming loop to start a new turn
-
+        # Handle max turns reached
+        return {
+            "llm_response": "Maximum number of function calling turns reached",
+            "usage": accumulated_usage,
+        }
+    
+    async def _stream_simple(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Handle simple streaming without tools or background tasks using responses.stream().
+        
+        Args:
+            input: The LLM input
+            
+        Yields:
+            Dict containing streaming response chunks and usage information
+        """
+        # Build base context in OpenAI format first
+        messages = [
+            {"role": "system", "content": input.system_prompt},
+            {"role": "user", "content": input.user_message}
+        ]
+        
+        # Convert to ResponseInputParam format  
+        response_input = self._convert_messages_to_response_input(messages)
+        
+        # Prepare arguments for responses.stream()
+        kwargs = {
+            "model": self.config.model,
+            "input": response_input,
+            "temperature": self.config.temperature,
+            "max_output_tokens": self.config.max_tokens if self.config.max_tokens else None,
+        }
+        
+        # Add text_format for structured output if needed
+        if input.structure_type:
+            sdk_structure_type = convert_typeddict_to_basemodel(input.structure_type)
+            kwargs["text_format"] = sdk_structure_type
+        
+        # Use proper ResponseStreamManager pattern
+        with self._client.responses.stream(**kwargs) as stream:
+            accumulated_usage = None
+            collected_text = ""
+            # Process streaming events
+            for event in stream:
+                # self.logger.info(f"🔍event: {event}")
+                if hasattr(event, "response") and hasattr(event.response, "usage") and event.response.usage:
+                    # Usage from ResponseIncompleteEvent or ResponseCompletedEvent
+                    current_usage = standardize_usage_metadata(event.response.usage, provider="azure")
+                    accumulated_usage = accumulate_usage_safely(current_usage, accumulated_usage)
+                
+                # Handle text delta events - progressive streaming
+                if "response.output_text.delta" in event.type and hasattr(event, "delta"):
+                    collected_text += event.delta
+                    if not input.structure_type:
+                        yield {"llm_response": collected_text}
+                    else:
+                        is_complete, fixed_json = is_json_complete(collected_text)
+                        if is_complete:
+                            try:
+                                final_response = parse_to_structure(fixed_json, input.structure_type)
+                                yield {"llm_response": final_response}
+                            except ValueError:
+                                pass
+            
+            # Final yield with usage information
             yield {"llm_response": None, "usage": accumulated_usage}
 
-            if current_turn >= input.max_turns:
-                yield {"llm_response": "Maximum number of function calling turns reached", "usage": accumulated_usage}
-        except Exception as e:
-            self.logger.error(f"Error in stream_with_tools: {str(e)}")
-            self.logger.error(traceback.format_exc())
-            yield {"llm_response": f"An error occurred: {str(e)}", "usage": None}
+    async def _stream_with_tools(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Handle complex streaming with tools and/or background tasks using responses.stream().
+        
+        Args:
+            input: The LLM input
+            
+        Yields:
+            Dict containing streaming response chunks and usage information
+        """
+        # Build base context and prepare tools
+        messages = [
+            {"role": "system", "content": input.system_prompt},
+            {"role": "user", "content": input.user_message}
+        ]
+        azure_tools, enhanced_instructions = self._prepare_tools_context(input)
+        messages[0]["content"] += enhanced_instructions
+        
+        # Convert to ResponseInputParam format
+        response_input = self._convert_messages_to_response_input(messages)
+        
+        # Handle complex cases with function calling (multi-turn using previous_response_id)
+        current_turn = 0
+        accumulated_usage = None
+        has_regular_functions = False
 
-    async def stream_completion(
-        self,
-        input: ILLMInput
-    ) -> AsyncGenerator[Dict[str, Any], None]:
-        """Stream completion responses with optional structure support"""
-        try:
-            # Track full response for usage extraction
-            full_response = None
-            
-            # For tracking complete content
-            complete_content = ""
-            
-            # Create messages array properly
-            messages = [
-                {"role": "system", "content": input.system_prompt},
-                {"role": "user", "content": input.user_message}
-            ]
-            
-            if input.structure_type:
-                # Create structure function
-                structure_function = self._create_structure_function(input.structure_type)
-                
-                # Add instruction to use structure function
-                system_message = {
-                    "role": "system",
-                    "content": f"You MUST use the {input.structure_type.__name__.lower()} function to format your response."
+        while current_turn < input.max_turns:
+            self.logger.info(f"Current turn: {current_turn}")
+            has_regular_functions = False
+
+            try:
+                # Prepare arguments for responses.stream()
+                kwargs = {
+                    "model": self.config.model,
+                    "temperature": self.config.temperature,
+                    "max_output_tokens": self.config.max_tokens if self.config.max_tokens else None,
+                    "tools": azure_tools if azure_tools else None,
+                    "parallel_tool_calls": True,
+                    "input": response_input
                 }
-                all_messages = messages + [system_message]
                 
-                # Create the stream
-                stream = self._client.chat.completions.create(
-                    model=self.config.model,
-                    messages=all_messages,
-                    functions=[structure_function],
-                    function_call={"name": input.structure_type.__name__.lower()},
-                    temperature=self.config.temperature,
-                    stream=True,
-                    stream_options={"include_usage": True}
-                )
+                # Add text_format for structured output if needed (convert TypedDict to BaseModel)
+                if input.structure_type:
+                    # Convert TypedDict to BaseModel for SDK compatibility
+                    sdk_structure_type = convert_typeddict_to_basemodel(input.structure_type)
+                    kwargs["text_format"] = sdk_structure_type
+                
+                # Generate streaming content with tools using responses API
+                with self._client.responses.stream(**kwargs) as stream:
+                    
+                    # Store function calls collected during streaming
+                    function_calls = []
+                    collected_text = ""
+                    chunk_count = 0
 
-                collected_message = {"function_call": {"name": "", "arguments": ""}}
-                
-                # Process the stream
-                for chunk in stream:
-                    # Handle the case where choices is empty but usage data is present
-                    if not chunk.choices and chunk.usage is not None:
-                        self.logger.info(f"Received final usage data: {chunk.usage}")
-                        usage = chunk.usage
-                        continue
+                    self.logger.debug(f"Starting stream processing for turn {current_turn}")
+
+                    # Process streaming response events - collect function calls and text
+                    for event in stream:
+                        chunk_count += 1                        
+                        # Handle usage metadata from response completion events
+                        if hasattr(event, "response") and hasattr(event.response, "usage") and event.response.usage:
+                            current_usage = standardize_usage_metadata(event.response.usage, provider="azure")
+                            accumulated_usage = accumulate_usage_safely(current_usage, accumulated_usage)
                         
-                    # Save full response object for usage extraction
-                    full_response = chunk
-                    
-                    # Skip chunks without choices
-                    if not chunk.choices:
-                        continue
+                        # Handle function call arguments completion  
+                        if event.type == "response.output_item.done" and event.item.type == 'function_call':
+                            # Collect function calls for unified processing
+                            function_calls.append(event.item)
+                                        
+                        # Handle text content from ResponseContentPartDoneEvent (for final responses)
+                        if "response.output_text.delta" in event.type and hasattr(event, "delta"):
+                            collected_text += event.delta
+                            if not input.structure_type:
+                                yield {"llm_response": collected_text}
+                            else:
+                                is_complete, fixed_json = is_json_complete(collected_text)
+                                if is_complete:
+                                    try:
+                                        final_response = parse_to_structure(fixed_json, input.structure_type)
+                                        yield {"llm_response": final_response}
+                                    except ValueError:
+                                        pass
                         
-                    delta = chunk.choices[0].delta
-                    
-                    # Handle function call streaming
-                    if hasattr(delta, 'function_call'):
-                        if delta.function_call.name:
-                            collected_message["function_call"]["name"] += delta.function_call.name
-                        if delta.function_call.arguments:
-                            collected_message["function_call"]["arguments"] += delta.function_call.arguments
-                            try:
-                                # Try to parse and create structured response
-                                function_args = json.loads(collected_message["function_call"]["arguments"])
-                                yield {"llm_response": input.structure_type(**function_args)}
-                            except (json.JSONDecodeError, TypeError, ValueError):
-                                # Continue collecting if we can't parse yet
-                                continue
-                
-                # Final yield with usage
-                if collected_message["function_call"]["arguments"]:
-                    try:
-                        function_args = json.loads(collected_message["function_call"]["arguments"])
-                        yield {"llm_response": input.structure_type(**function_args), "usage": usage}
-                    except (json.JSONDecodeError, TypeError, ValueError):
-                        pass
-            else:
-                # Simple unstructured completion
-                stream = self._client.chat.completions.create(
-                    model=self.config.model,
-                    messages=messages,
-                    temperature=self.config.temperature,
-                    stream=True,
-                    stream_options={"include_usage": True}
-                )
+                    self.logger.debug(f"Turn {current_turn}: Stream ended. Processed {chunk_count} chunks. Function calls: {len(function_calls)}, Text collected: {len(collected_text)} chars")
 
-                for chunk in stream:
-                    # Handle the case where choices is empty but usage data is present
-                    if not chunk.choices and chunk.usage is not None:
-                        self.logger.info(f"Received final usage data: {chunk.usage}")
-                        usage = chunk.usage
-                        continue
-                    
-                    # Save full response object for usage extraction
-                    full_response = chunk
-                    
-                    # Skip chunks without choices
-                    if not chunk.choices:
-                        continue
+                    # Process function calls if any were collected using unified method
+                    if function_calls:
+                        has_regular_functions = await self._process_function_calls(function_calls, input, response_input)
                         
-                    if chunk.choices[0].delta.content:
-                        content = chunk.choices[0].delta.content
-                        complete_content += content
-                        yield {"llm_response": content}
+                    self.logger.info(f"🔍has_regular_functions: {has_regular_functions}")
+                    if not has_regular_functions:
+                        # Stream completed
+                        self.logger.debug(f"Turn {current_turn}: Stream completed")
+                        break
                 
-                # Final yield with usage
-                yield {"llm_response": complete_content, "usage": usage}
+                    current_turn += 1
+                    self.logger.debug(f"Turn {current_turn}: Continuing - regular tools need processing")
 
-        except Exception as e:
-            self.logger.error(f"Error in stream_completion: {str(e)}")
-            self.logger.error(traceback.format_exc())
-            yield {"llm_response": f"An error occurred: {str(e)}", "usage": None}
+            except Exception as e:
+                self.logger.error(f"Error in Azure stream_with_tools turn {current_turn}: {str(e)}")
+                self.logger.error(traceback.format_exc())
+                yield {
+                    "llm_response": f"An error occurred: {str(e)}",
+                    "usage": accumulated_usage,
+                }
+                return
 
-    def _is_json_complete(self, json_str: str) -> tuple[bool, str]:
-        """
-        Check if JSON string is complete and properly balanced.
-        Checks curly braces, double quotes.
-        Returns a tuple of (is_complete, fixed_json_string)
-        If quotes are unbalanced, adds missing quotes before closing braces.
-        """
-        # Check curly braces balance
-        open_brace_count = json_str.count('{')
-        close_brace_count = json_str.count('}')
-        # self.logger.info(f"Open brace count: {open_brace_count}")
-        # self.logger.info(f"Close brace count: {close_brace_count}")
-        
-        # Check double quotes balance
-        double_quote_count = json_str.count('"')
-        # self.logger.info(f"Double quote count: {double_quote_count}")
-                
-        # Fix unbalanced quotes and handle braces
-        fixed_json = json_str
-        
-        # Fix double quotes if unbalanced
-        if double_quote_count % 2 != 0:
-            # self.logger.info("Double quotes are not balanced, adding closing quote")
-            fixed_json += '"'
-            
-        # Handle curly braces
-        if open_brace_count == close_brace_count:
-            # self.logger.info("Json str is complete")
-            return True, fixed_json
-        elif open_brace_count > close_brace_count:
-            # Add missing closing braces
-            missing_braces = open_brace_count - close_brace_count
-            # self.logger.info(f"Missing braces: {missing_braces}")
-            return True, fixed_json + ('}' * missing_braces)
+        # Handle max turns reached
+        if current_turn >= input.max_turns:
+            self.logger.warning(f"Maximum turns reached: {current_turn} >= {input.max_turns}")
+            yield {
+                "llm_response": "Maximum number of function calling turns reached",
+                "usage": accumulated_usage,
+            }
         else:
-            self.logger.info("Json str is not complete")
-            return False, fixed_json  # More closing than opening braces - invalid JSON
+            # Final usage yield
+            yield {"llm_response": None, "usage": accumulated_usage}

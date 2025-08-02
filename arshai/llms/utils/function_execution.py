@@ -169,20 +169,26 @@ class FunctionOrchestrator:
         self, 
         function_calls, 
         input_functions: Dict[str, Callable],
-        input_background_tasks: Dict[str, Callable],
-        contents: List[str]
-    ) -> None:
+        input_background_tasks: Dict[str, Callable]
+    ) -> Dict[str, Any]:
         """
-        Process function calls from LLM response into organized execution groups.
+        Process function calls from LLM response and return execution results.
         
         This is a generic method that can be used by any LLM client to process
-        function calls from model responses.
+        function calls from model responses. Returns raw results that clients
+        can format according to their SDK requirements.
         
         Args:
             function_calls: Function calls from the LLM response
             input_functions: Regular callable functions dictionary
             input_background_tasks: Background tasks dictionary
-            contents: Conversation contents list to update
+            
+        Returns:
+            Dict containing:
+            - 'function_results': List of regular function results
+            - 'function_names': List of function names that were executed
+            - 'function_args': List of arguments used for each function
+            - 'background_initiated': List of background task descriptions
         """
         # Prepare tasks for parallel execution
         function_tasks = []
@@ -210,32 +216,29 @@ class FunctionOrchestrator:
                 raise ValueError(f"Function {function_name} not found in available functions or background tasks")
         
         # Execute background tasks
+        background_initiated = []
         if background_tasks_to_execute:
             background_messages = await self.execute_background_tasks(
                 background_tasks_to_execute, background_args_dict
             )
-            contents.extend(background_messages)
+            background_initiated = background_messages
         
         # Execute regular functions in parallel
+        function_results = []
         if function_tasks:
             logger.info(f"Executing {len(function_tasks)} functions in parallel")
-            results = await self.execute_parallel_functions(
+            function_results = await self.execute_parallel_functions(
                 function_tasks, function_args_list
             )
-            
-            # Build enhanced context with function arguments and results
-            context_messages = self.build_function_context_messages(
-                function_names, results, function_args_list
-            )
-            contents.extend(context_messages)
-            
-            # Add completion indicator to guide model's next response
-            completion_message = self.get_completion_message(len(function_tasks))
-            if completion_message:
-                contents.append(completion_message)
-                logger.info(f"Added completion indicator: {completion_message}")
-            
-            logger.info(f"Completed {len(results)} function calls with enhanced context")
+            logger.info(f"Completed {len(function_results)} function calls")
+        
+        # Return structured results for client-specific formatting
+        return {
+            'function_results': function_results,
+            'function_names': function_names,
+            'function_args': function_args_list,
+            'background_initiated': background_initiated
+        }
     
     async def wait_for_background_tasks(self, timeout: float = None) -> None:
         """

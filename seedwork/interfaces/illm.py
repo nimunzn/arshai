@@ -127,9 +127,6 @@ class ILLM(Protocol):
         """Convert functions to LLM provider-specific format"""
         ...
 
-    def _prepare_base_context(self, input: ILLMInput) -> str:
-        """Build base conversation context (provider-specific format)"""
-        ...
     
     async def chat(self, input: ILLMInput) -> Dict[str, Any]:
         """Process a chat message with optional tools and structured output"""

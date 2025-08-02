@@ -6,7 +6,9 @@ from language models.
 """
 
 import json
-from typing import Union, Type, TypeVar
+from typing import Union, Type, TypeVar, get_type_hints
+
+from pydantic import BaseModel, Field, create_model
 
 T = TypeVar("T")
 
@@ -96,3 +98,44 @@ def extract_text_from_structure(instance: object, text_fields: list = None) -> s
                 else:
                     text_parts.append(str(value))
         return " ".join(text_parts)
+    
+def convert_typeddict_to_basemodel(typeddict_class: Type) -> Type[BaseModel]:
+    """
+    Convert a TypedDict class to a BaseModel class for Azure OpenAI SDK compatibility.
+    
+    Args:
+        typeddict_class: TypedDict class to convert
+        
+    Returns:
+        Dynamically created BaseModel class with same fields and types
+    """
+    # If it's already a BaseModel, return as-is
+    if isinstance(typeddict_class, type) and issubclass(typeddict_class, BaseModel):
+        return typeddict_class
+        
+    # Get type hints from the TypedDict
+    try:
+        type_hints = get_type_hints(typeddict_class)
+    except Exception:
+        # Fallback for complex cases - return a generic BaseModel
+        return BaseModel
+    
+    # Create field definitions for the BaseModel
+    field_definitions = {}
+    for field_name, field_type in type_hints.items():
+        # Create Field with description if available from docstring or schema
+        if hasattr(typeddict_class, 'model_json_schema'):
+            try:
+                schema = typeddict_class.model_json_schema()
+                properties = schema.get('properties', {})
+                field_info = properties.get(field_name, {})
+                description = field_info.get('description', f'{field_name} field')
+                field_definitions[field_name] = (field_type, Field(description=description))
+            except Exception:
+                field_definitions[field_name] = (field_type, ...)
+        else:
+            field_definitions[field_name] = (field_type, ...)
+    
+    # Create dynamic BaseModel class
+    model_name = f"{typeddict_class.__name__}Model"
+    return create_model(model_name, **field_definitions)
