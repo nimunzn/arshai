@@ -756,7 +756,6 @@ The response Must be in JSON format"""
                         continue
                     
                     delta = chunk.choices[0].delta
-                    self.logger.info(f"🔍delta: {delta}")
 
                     # Handle content streaming
                     if hasattr(delta, 'content') and delta.content is not None:
@@ -768,15 +767,18 @@ The response Must be in JSON format"""
 
                     # Handle tool calls streaming
                     if hasattr(delta, 'tool_calls') and delta.tool_calls:
-                        for i, tool_delta in enumerate(delta.tool_calls):
-                            # Initialize or get current tool call
-                            if i >= len(collected_message["tool_calls"]):
+                        for tool_delta in delta.tool_calls:
+                            # Use the index from the tool_delta, not enumerate
+                            tool_index = tool_delta.index
+                            
+                            # Ensure we have enough slots in the array
+                            while len(collected_message["tool_calls"]) <= tool_index:
                                 collected_message["tool_calls"].append({
-                                    "id": tool_delta.id or "",
+                                    "id": "",
                                     "function": {"name": "", "arguments": ""}
                                 })
                             
-                            current_tool_call = collected_message["tool_calls"][i]
+                            current_tool_call = collected_message["tool_calls"][tool_index]
                             
                             # Update tool call with new delta information
                             if tool_delta.id:
@@ -803,6 +805,7 @@ The response Must be in JSON format"""
                             })()
                     
                     mock_tool_calls = [MockToolCall(tc) for tc in collected_message["tool_calls"] if tc["function"]["name"]]
+                    self.logger.info(f"tool to call {mock_tool_calls}")
                     has_regular_functions, structured_response = await self._process_function_calls(mock_tool_calls, input, messages)
                     
                     # If we got a structured response, yield it and break
