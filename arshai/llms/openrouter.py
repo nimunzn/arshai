@@ -423,7 +423,8 @@ class OpenRouterClient(ILLM):
             all_tools = [structure_function] + input.tools_list
             messages[0]["content"] += f"""\nYou MUST ALWAYS use the {input.structure_type.__name__.lower()} tool/function to format your response.
                                         Your response ALWAYS MUST be retunrned using the tool, independently of what is the message or response are.
-                                        You MUST ALWAYS CALLING TOOLS FOR RETURNING RESPONSE"""
+                                        You MUST ALWAYS CALLING TOOLS FOR RETURNING RESPONSE
+                                        The response Must be in JSON format"""
             response_format = {"type": "json_object"}
         else:
             all_tools = input.tools_list
@@ -612,7 +613,8 @@ class OpenRouterClient(ILLM):
                 
                 # Prepare messages
                 messages = [
-                    {"role": "system", "content": f"{input.system_prompt}\nYou MUST use the {input.structure_type.__name__.lower()} function to format your response."},
+                    {"role": "system", "content": f"{input.system_prompt}\nYou MUST use the {input.structure_type.__name__.lower()} function to format your response.
+                     The response MUST be in JSON format"},
                     {"role": "user", "content": input.user_message}
                 ]
                 
