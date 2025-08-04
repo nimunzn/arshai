@@ -52,68 +52,153 @@ class GeminiClient(ILLM):
     
     def _initialize_client(self) -> Any:
         """
-        Initialize the Google GenAI client with automatic authentication detection.
+        Initialize the Google GenAI client with safe HTTP configuration and authentication detection.
+        
+        Uses SafeHttpClientFactory to create a client with proper timeouts and connection limits
+        to prevent deadlock issues. Falls back gracefully if advanced configuration is not available.
         
         Authentication priority:
         1. API Key (GOOGLE_API_KEY) - Simple authentication
         2. Service Account - Enterprise authentication using credentials file
         
         Returns:
-            Google GenAI client instance
+            Google GenAI client instance with safe HTTP configuration
         
         Raises:
             ValueError: If neither authentication method is properly configured
         """
-        # Try API key authentication first (simpler)
-        if self.api_key:
-            self.logger.info("Using API key authentication for Gemini")
-            try:
-                client = genai.Client(api_key=self.api_key)
-                # Test the client with a simple call
-                self._test_client_connection(client)
-                return client
-            except Exception as e:
-                self.logger.error(f"API key authentication failed: {str(e)}")
-                raise ValueError(f"Invalid Google API key: {str(e)}")
         
-        # Try service account authentication
-        elif self.service_account_path and self.project_id and self.location:
-            self.logger.info("Using service account authentication for Gemini")
-            try:
-                # Load service account credentials
-                credentials = service_account.Credentials.from_service_account_file(
-                    self.service_account_path,
-                    scopes=['https://www.googleapis.com/auth/cloud-platform']
+        try:
+            # Import the safe factory
+            from arshai.clients.utils.safe_http_client import SafeHttpClientFactory
+            
+            # Try API key authentication first (simpler)
+            if self.api_key:
+                self.logger.info("Creating GenAI client with API key and safe HTTP configuration")
+                try:
+                    client = SafeHttpClientFactory.create_genai_client(api_key=self.api_key)
+                    # Test the client with a simple call
+                    self._test_client_connection(client)
+                    self.logger.info("GenAI client created successfully with safe configuration")
+                    return client
+                except Exception as e:
+                    self.logger.error(f"API key authentication with safe config failed: {str(e)}")
+                    # Try fallback with basic client
+                    self.logger.info("Trying fallback GenAI client with API key")
+                    try:
+                        import google.genai as genai
+                        client = genai.Client(api_key=self.api_key)
+                        self._test_client_connection(client)
+                        return client
+                    except Exception as fallback_error:
+                        self.logger.error(f"Fallback API key authentication failed: {fallback_error}")
+                        raise ValueError(f"Invalid Google API key: {str(e)}")
+            
+            # Try service account authentication
+            elif self.service_account_path and self.project_id and self.location:
+                self.logger.info("Creating GenAI client with service account and safe HTTP configuration")
+                try:
+                    # Load service account credentials
+                    credentials = service_account.Credentials.from_service_account_file(
+                        self.service_account_path,
+                        scopes=['https://www.googleapis.com/auth/cloud-platform']
+                    )
+                    
+                    client = SafeHttpClientFactory.create_genai_client(
+                        vertexai=True,
+                        project=self.project_id,
+                        location=self.location,
+                        credentials=credentials
+                    )
+                    
+                    # Test the client with a simple call
+                    self._test_client_connection(client)
+                    self.logger.info("GenAI service account client created successfully with safe configuration")
+                    return client
+                    
+                except FileNotFoundError:
+                    self.logger.error(f"Service account file not found: {self.service_account_path}")
+                    raise ValueError(f"Service account file not found: {self.service_account_path}")
+                except Exception as e:
+                    self.logger.error(f"Service account authentication with safe config failed: {str(e)}")
+                    # Try fallback with basic client
+                    self.logger.info("Trying fallback GenAI client with service account")
+                    try:
+                        import google.genai as genai
+                        credentials = service_account.Credentials.from_service_account_file(
+                            self.service_account_path,
+                            scopes=['https://www.googleapis.com/auth/cloud-platform']
+                        )
+                        client = genai.Client(
+                            vertexai=True,
+                            project=self.project_id,
+                            location=self.location,
+                            credentials=credentials
+                        )
+                        self._test_client_connection(client)
+                        return client
+                    except Exception as fallback_error:
+                        self.logger.error(f"Fallback service account authentication failed: {fallback_error}")
+                        raise ValueError(f"Service account authentication failed: {str(e)}")
+            
+            else:
+                # No valid authentication method found
+                error_msg = (
+                    "No valid authentication method found for Gemini. Please set either:\n"
+                    "1. GOOGLE_API_KEY for API key authentication, or\n"
+                    "2. VERTEX_AI_SERVICE_ACCOUNT_PATH, VERTEX_AI_PROJECT_ID, and VERTEX_AI_LOCATION "
+                    "for service account authentication"
                 )
-                
-                client = genai.Client(
-                    vertexai=True,
-                    project=self.project_id,
-                    location=self.location,
-                    credentials=credentials
-                )
-                
-                # Test the client with a simple call
-                self._test_client_connection(client)
-                return client
-                
-            except FileNotFoundError:
-                self.logger.error(f"Service account file not found: {self.service_account_path}")
-                raise ValueError(f"Service account file not found: {self.service_account_path}")
-            except Exception as e:
-                self.logger.error(f"Service account authentication failed: {str(e)}")
-                raise ValueError(f"Service account authentication failed: {str(e)}")
+                self.logger.error(error_msg)
+                raise ValueError(error_msg)
         
-        else:
-            # No valid authentication method found
-            error_msg = (
-                "No valid authentication method found for Gemini. Please set either:\n"
-                "1. GOOGLE_API_KEY for API key authentication, or\n"
-                "2. VERTEX_AI_SERVICE_ACCOUNT_PATH, VERTEX_AI_PROJECT_ID, and VERTEX_AI_LOCATION "
-                "for service account authentication"
-            )
-            self.logger.error(error_msg)
-            raise ValueError(error_msg)
+        except ImportError as e:
+            self.logger.warning(f"Safe HTTP client factory not available: {e}, using default GenAI client")
+            
+            # Fallback to original implementation without safe HTTP configuration
+            if self.api_key:
+                self.logger.info("Using API key authentication for Gemini (fallback)")
+                try:
+                    import google.genai as genai
+                    client = genai.Client(api_key=self.api_key)
+                    self._test_client_connection(client)
+                    return client
+                except Exception as e:
+                    self.logger.error(f"API key authentication failed: {str(e)}")
+                    raise ValueError(f"Invalid Google API key: {str(e)}")
+            
+            elif self.service_account_path and self.project_id and self.location:
+                self.logger.info("Using service account authentication for Gemini (fallback)")
+                try:
+                    import google.genai as genai
+                    credentials = service_account.Credentials.from_service_account_file(
+                        self.service_account_path,
+                        scopes=['https://www.googleapis.com/auth/cloud-platform']
+                    )
+                    client = genai.Client(
+                        vertexai=True,
+                        project=self.project_id,
+                        location=self.location,
+                        credentials=credentials
+                    )
+                    self._test_client_connection(client)
+                    return client
+                except FileNotFoundError:
+                    self.logger.error(f"Service account file not found: {self.service_account_path}")
+                    raise ValueError(f"Service account file not found: {self.service_account_path}")
+                except Exception as e:
+                    self.logger.error(f"Service account authentication failed: {str(e)}")
+                    raise ValueError(f"Service account authentication failed: {str(e)}")
+            
+            else:
+                error_msg = (
+                    "No valid authentication method found for Gemini. Please set either:\n"
+                    "1. GOOGLE_API_KEY for API key authentication, or\n"
+                    "2. VERTEX_AI_SERVICE_ACCOUNT_PATH, VERTEX_AI_PROJECT_ID, and VERTEX_AI_LOCATION "
+                    "for service account authentication"
+                )
+                self.logger.error(error_msg)
+                raise ValueError(error_msg)
     
     def _test_client_connection(self, client) -> None:
         """

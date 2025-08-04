@@ -28,13 +28,15 @@ class OpenRouterClient(ILLM):
     
     def _initialize_client(self) -> Any:
         """
-        Initialize the OpenRouter client.
+        Initialize the OpenRouter client with safe HTTP configuration.
         
         OpenRouter uses an OpenAI-compatible API with custom base URL and headers.
-        The client reads OPENROUTER_API_KEY from environment variables.
+        Uses SafeHttpClientFactory to create a client with high connection limits and proper
+        timeouts to prevent httpcore deadlock issues. Falls back gracefully if advanced
+        configuration is not available.
         
         Returns:
-            OpenAI client instance configured for OpenRouter
+            OpenAI client instance configured for OpenRouter with safe HTTP configuration
         
         Raises:
             ValueError: If OPENROUTER_API_KEY is not set in environment variables
@@ -51,15 +53,81 @@ class OpenRouterClient(ILLM):
         site_url = os.environ.get("OPENROUTER_SITE_URL", "")
         app_name = os.environ.get("OPENROUTER_APP_NAME", "arshai")
         
-        # Create client with OpenRouter-specific configuration
-        return OpenAI(
-            api_key=api_key,
-            base_url="https://openrouter.ai/api/v1",
-            default_headers={
-                "HTTP-Referer": site_url,
-                "X-Title": app_name,
-            }
-        )
+        try:
+            # Import the safe factory
+            from arshai.clients.utils.safe_http_client import SafeHttpClientFactory
+            
+            self.logger.info("Creating OpenRouter client with safe HTTP configuration")
+            
+            # Create safe httpx client first
+            import httpx
+            httpx_version = getattr(httpx, '__version__', '0.0.0')
+            
+            # Get safe HTTP configuration
+            limits_config = SafeHttpClientFactory._get_safe_limits_config(httpx_version)
+            timeout_config = SafeHttpClientFactory._get_safe_timeout_config(httpx_version)
+            additional_config = SafeHttpClientFactory._get_additional_httpx_config(httpx_version)
+            
+            safe_http_client = httpx.Client(
+                limits=limits_config,
+                timeout=timeout_config,
+                **additional_config
+            )
+            
+            # Create OpenRouter client with safe HTTP client
+            client = OpenAI(
+                api_key=api_key,
+                base_url="https://openrouter.ai/api/v1",
+                default_headers={
+                    "HTTP-Referer": site_url,
+                    "X-Title": app_name,
+                },
+                http_client=safe_http_client,
+                max_retries=3
+            )
+            
+            self.logger.info("OpenRouter client created successfully with safe configuration")
+            return client
+            
+        except ImportError as e:
+            self.logger.warning(f"Safe HTTP client factory not available: {e}, using default OpenRouter client")
+            # Fallback to original implementation
+            return OpenAI(
+                api_key=api_key,
+                base_url="https://openrouter.ai/api/v1",
+                default_headers={
+                    "HTTP-Referer": site_url,
+                    "X-Title": app_name,
+                }
+            )
+        
+        except Exception as e:
+            self.logger.error(f"Failed to create safe OpenRouter client: {e}")
+            # Final fallback to ensure system keeps working
+            self.logger.info("Using fallback OpenRouter client configuration")
+            try:
+                # At least try to set a timeout for basic safety
+                return OpenAI(
+                    api_key=api_key,
+                    base_url="https://openrouter.ai/api/v1",
+                    default_headers={
+                        "HTTP-Referer": site_url,
+                        "X-Title": app_name,
+                    },
+                    timeout=30.0,
+                    max_retries=2
+                )
+            except Exception as fallback_error:
+                self.logger.error(f"Fallback OpenRouter client also failed: {fallback_error}")
+                # Last resort - basic client
+                return OpenAI(
+                    api_key=api_key,
+                    base_url="https://openrouter.ai/api/v1",
+                    default_headers={
+                        "HTTP-Referer": site_url,
+                        "X-Title": app_name,
+                    }
+                )
     
     def _create_structure_function(self, structure_type: Type[T]) -> Dict:
         """Create a function definition from the structure type"""
@@ -355,7 +423,8 @@ class OpenRouterClient(ILLM):
             all_tools = [structure_function] + input.tools_list
             messages[0]["content"] += f"""\nYou MUST ALWAYS use the {input.structure_type.__name__.lower()} tool/function to format your response.
                                         Your response ALWAYS MUST be retunrned using the tool, independently of what is the message or response are.
-                                        You MUST ALWAYS CALLING TOOLS FOR RETURNING RESPONSE"""
+                                        You MUST ALWAYS CALLING TOOLS FOR RETURNING RESPONSE
+                                        The response Must be in JSON format"""
             response_format = {"type": "json_object"}
         else:
             all_tools = input.tools_list
@@ -544,7 +613,8 @@ class OpenRouterClient(ILLM):
                 
                 # Prepare messages
                 messages = [
-                    {"role": "system", "content": f"{input.system_prompt}\nYou MUST use the {input.structure_type.__name__.lower()} function to format your response."},
+                    {"role": "system", "content": f"{input.system_prompt}\nYou MUST use the {input.structure_type.__name__.lower()} function to format your response.
+                     The response MUST be in JSON format"},
                     {"role": "user", "content": input.user_message}
                 ]
                 
