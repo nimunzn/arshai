@@ -613,8 +613,7 @@ class OpenRouterClient(ILLM):
                 
                 # Prepare messages
                 messages = [
-                    {"role": "system", "content": f"{input.system_prompt}\nYou MUST use the {input.structure_type.__name__.lower()} function to format your response.
-                     The response MUST be in JSON format"},
+                    {"role": "system", "content": f"{input.system_prompt}\nYou MUST use the {input.structure_type.__name__.lower()} function to format your response. The response MUST be in JSON format"},
                     {"role": "user", "content": input.user_message}
                 ]
                 
