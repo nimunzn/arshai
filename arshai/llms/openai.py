@@ -191,7 +191,7 @@ class OpenAIClient(BaseLLMClient):
         Returns:
             List of function definition dictionaries in OpenAI format
         """
-        azure_functions = []
+        openai_functions = []
         
         # Handle JSON schema tool dictionaries (from tools_list)
         if isinstance(functions, list):
@@ -209,7 +209,7 @@ class OpenAIClient(BaseLLMClient):
                     parameters["additionalProperties"] = False
 
                 # Create standardized flat tool format
-                azure_functions.append({
+                openai_functions.append({
                     "type": "function",
                     "name": tool.get("name"),
                     "description": description,
@@ -226,7 +226,7 @@ class OpenAIClient(BaseLLMClient):
                         function_tool = self._python_function_to_openai_tool(callable_func, name, function_type)
                         # Add type to create flat structure
                         function_tool["type"] = "function"
-                        azure_functions.append(function_tool)
+                        openai_functions.append(function_tool)
                     else:
                         # For regular callable functions, use basic parameter extraction
                         description = callable_func.__doc__ or name
@@ -238,7 +238,7 @@ class OpenAIClient(BaseLLMClient):
                             "additionalProperties": False  # Required for strict mode
                         }
                         
-                        azure_functions.append({
+                        openai_functions.append({
                             "type": "function",
                             "name": name,
                             "description": description,
@@ -250,7 +250,7 @@ class OpenAIClient(BaseLLMClient):
                     self.logger.warning(f"Failed to convert function {name}: {str(e)}")
                     continue
         
-        return azure_functions
+        return openai_functions
     
     def _prepare_tools_context(self, input: ILLMInput) -> Tuple[List, str]:
         """
@@ -434,7 +434,7 @@ class OpenAIClient(BaseLLMClient):
         # Process usage metadata
         usage = None
         if hasattr(response, "usage") and response.usage:
-            usage = standardize_usage_metadata(response.usage, provider="azure")
+            usage = standardize_usage_metadata(response.usage, provider="openai")
 
         # Handle response based on whether it's structured or not
         if input.structure_type:
@@ -469,7 +469,7 @@ class OpenAIClient(BaseLLMClient):
             {"role": "system", "content": input.system_prompt},
             {"role": "user", "content": input.user_message}
         ]
-        azure_tools, enhanced_instructions = self._prepare_tools_context(input)
+        openai_tools, enhanced_instructions = self._prepare_tools_context(input)
         messages[0]["content"] += enhanced_instructions
         
         # Convert to ResponseInputParam format
@@ -490,7 +490,7 @@ class OpenAIClient(BaseLLMClient):
                     "model": self.config.model,
                     "temperature": self.config.temperature,
                     "max_output_tokens": self.config.max_tokens if self.config.max_tokens else None,
-                    "tools": azure_tools if azure_tools else None,
+                    "tools": openai_tools if openai_tools else None,
                     "input": response_input
                 }
                 # Add text_format for structured output if needed
@@ -502,7 +502,7 @@ class OpenAIClient(BaseLLMClient):
                 
                 # Process usage metadata safely
                 if hasattr(response, "usage") and response.usage:
-                    current_usage = standardize_usage_metadata(response.usage, provider="azure")
+                    current_usage = standardize_usage_metadata(response.usage, provider="openai")
                     accumulated_usage = accumulate_usage_safely(current_usage, accumulated_usage)
 
                 # Check for function calls in output
@@ -637,7 +637,7 @@ class OpenAIClient(BaseLLMClient):
             {"role": "system", "content": input.system_prompt},
             {"role": "user", "content": input.user_message}
         ]
-        azure_tools, enhanced_instructions = self._prepare_tools_context(input)
+        openai_tools, enhanced_instructions = self._prepare_tools_context(input)
         messages[0]["content"] += enhanced_instructions
         
         # Convert to ResponseInputParam format
@@ -658,7 +658,7 @@ class OpenAIClient(BaseLLMClient):
                     "model": self.config.model,
                     "temperature": self.config.temperature,
                     "max_output_tokens": self.config.max_tokens if self.config.max_tokens else None,
-                    "tools": azure_tools if azure_tools else None,
+                    "tools": openai_tools if openai_tools else None,
                     "parallel_tool_calls": True,
                     "input": response_input
                 }
@@ -684,7 +684,7 @@ class OpenAIClient(BaseLLMClient):
                         chunk_count += 1                        
                         # Handle usage metadata from response completion events
                         if hasattr(event, "response") and hasattr(event.response, "usage") and event.response.usage:
-                            current_usage = standardize_usage_metadata(event.response.usage, provider="azure")
+                            current_usage = standardize_usage_metadata(event.response.usage, provider="openai")
                             accumulated_usage = accumulate_usage_safely(current_usage, accumulated_usage)
                         
                         # Handle function call arguments completion  

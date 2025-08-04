@@ -338,7 +338,6 @@ class AzureClient(BaseLLMClient):
                 self.args = args
         
         generic_function_calls = []
-        has_regular_functions = False
         
         for func_call in function_calls:
             # Extract function details (handles both responses.parse and responses.stream formats)
@@ -490,10 +489,9 @@ class AzureClient(BaseLLMClient):
         # Handle complex cases with function calling (multi-turn using previous_response_id)
         current_turn = 0
         accumulated_usage = None
-        has_regular_functions = False
         while current_turn < input.max_turns:
             self.logger.info(f"Current turn: {current_turn}")
-
+            has_regular_functions = False
             try:
                 start_time = time.time()
                 
@@ -658,7 +656,6 @@ class AzureClient(BaseLLMClient):
         # Handle complex cases with function calling (multi-turn using previous_response_id)
         current_turn = 0
         accumulated_usage = None
-        has_regular_functions = False
 
         while current_turn < input.max_turns:
             self.logger.info(f"Current turn: {current_turn}")
