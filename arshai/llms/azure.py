@@ -382,6 +382,7 @@ class AzureClient(BaseLLMClient):
                 self.args = args
         
         generic_function_calls = []
+        has_regular_functions = False  # Initialize before the loop
         
         for func_call in function_calls:
             # Extract function details (handles both responses.parse and responses.stream formats)
