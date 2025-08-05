@@ -27,6 +27,26 @@ T = TypeVar("T")
 class OpenRouterClient(BaseLLMClient):
     """OpenRouter implementation of the LLM interface"""
     
+    # Constants for structured output instructions
+    STRUCTURE_INSTRUCTIONS_TEMPLATE = """
+
+You MUST ALWAYS use the {function_name} tool/function to format your response.
+Your response ALWAYS MUST be returned using the tool, independently of what the message or response are.
+You MUST ALWAYS CALL TOOLS FOR RETURNING RESPONSE
+The response Must be in JSON format"""
+    
+    # Constants for background task descriptions
+    BACKGROUND_TASK_PREFIX = "BACKGROUND TASK: "
+    BACKGROUND_TASK_SUFFIX = ". This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
+    
+    # Constants for error messages
+    class ErrorMessages:
+        STRUCTURE_FUNCTION_NOT_CALLED = "Expected structure function call for {structure_type} but none received"
+        STRUCTURE_RESPONSE_FAILED = "Failed to generate structured response of type {structure_type}"
+        STRUCTURE_RESPONSE_ERROR = "Error creating structured response from {function_name}: {error}"
+        MAX_TURNS_REACHED = "Maximum number of function calling turns reached"
+        FUNCTION_NOT_FOUND = "Function {function_name} not found in available functions or background tasks"
+    
     def __init__(self, config: ILLMConfig):
         """
         Initialize the OpenRouter client.
@@ -162,7 +182,7 @@ class OpenRouterClient(BaseLLMClient):
             
             # Enhance description for background tasks
             if function_type == "background_task":
-                description = f"BACKGROUND TASK: {description}. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
+                description = f"{self.BACKGROUND_TASK_PREFIX}{description}{self.BACKGROUND_TASK_SUFFIX}"
             
             # Build parameters schema
             properties = {}
@@ -208,7 +228,7 @@ class OpenRouterClient(BaseLLMClient):
             # Return basic fallback schema
             description = f"Execute {name} function"
             if function_type == "background_task":
-                description = f"BACKGROUND TASK: {description}. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
+                description = f"{self.BACKGROUND_TASK_PREFIX}{description}{self.BACKGROUND_TASK_SUFFIX}"
             
             return {
                 "name": name,
@@ -273,7 +293,7 @@ class OpenRouterClient(BaseLLMClient):
                 
                 # Enhance description for background tasks
                 if function_type == "background_task":
-                    description = f"BACKGROUND TASK: {description}. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
+                    description = f"{self.BACKGROUND_TASK_PREFIX}{description}{self.BACKGROUND_TASK_SUFFIX}"
                 
                 # Ensure additionalProperties is False for strict mode
                 parameters = tool.get("parameters", {})
@@ -403,6 +423,23 @@ You MUST ALWAYS CALL TOOLS FOR RETURNING RESPONSE
 The response Must be in JSON format"""
         
         return openrouter_tools, enhanced_instructions
+    
+    def _prepare_structure_context(self, input: ILLMInput, kwargs: Dict[str, Any], messages: List[Dict]) -> None:
+        """
+        Prepare structure function and enhance messages for structured output.
+        
+        Args:
+            input: The LLM input containing structure_type
+            kwargs: Dictionary to add tools to
+            messages: List of messages to enhance with structure instructions
+        """
+        if input.structure_type:
+            structure_function = self._create_structure_function(input.structure_type)
+            kwargs["tools"] = [structure_function]
+            
+            # Add structure function instructions
+            function_name = input.structure_type.__name__.lower()
+            messages[0]["content"] += self.STRUCTURE_INSTRUCTIONS_TEMPLATE.format(function_name=function_name)
 
     async def _process_function_calls(self, tool_calls, input: ILLMInput, messages: List[Dict]) -> Tuple[bool, Any]:
         """
@@ -443,14 +480,14 @@ The response Must be in JSON format"""
                     self.logger.info(f"Created structured response: {function_name}")
                     continue  # Don't process structure function as regular function
                 except Exception as e:
-                    self.logger.error(f"Error creating structured response from {function_name}: {str(e)}")
+                    self.logger.error(self.ErrorMessages.STRUCTURE_RESPONSE_ERROR.format(function_name=function_name, error=str(e)))
                     continue
             
             # Track if we have regular functions (affects continuation logic)
             if function_name in (input.callable_functions or {}):
                 has_regular_functions = True
             elif function_name not in (input.background_tasks or {}):
-                self.logger.warning(f"Function {function_name} not found in available functions or background tasks")
+                self.logger.warning(self.ErrorMessages.FUNCTION_NOT_FOUND.format(function_name=function_name))
                 continue
                 
             generic_function_calls.append(FunctionCall(name=function_name, args=function_args))
@@ -533,16 +570,7 @@ The response Must be in JSON format"""
         }
         
         # For structured output, use function calling approach (not JSON mode)
-        if input.structure_type:
-            structure_function = self._create_structure_function(input.structure_type)
-            kwargs["tools"] = [structure_function]
-            
-            # Add structure function instructions
-            function_name = input.structure_type.__name__.lower()
-            messages[0]["content"] += f"""\n\nYou MUST ALWAYS use the {function_name} tool/function to format your response.
-Your response ALWAYS MUST be returned using the tool, independently of what the message or response are.
-You MUST ALWAYS CALL TOOLS FOR RETURNING RESPONSE
-The response Must be in JSON format"""
+        self._prepare_structure_context(input, kwargs, messages)
                 
         response = self._client.chat.completions.create(**kwargs)
         
@@ -566,12 +594,12 @@ The response Must be in JSON format"""
                             self.logger.info(f"Created structured response via function call: {function_name}")
                             return {"llm_response": structured_response, "usage": usage}
                         except Exception as e:
-                            self.logger.error(f"Error creating structured response from {function_name}: {str(e)}")
-                            return {"llm_response": f"Error creating structured response: {str(e)}", "usage": usage}
+                            self.logger.error(self.ErrorMessages.STRUCTURE_RESPONSE_ERROR.format(function_name=function_name, error=str(e)))
+                            return {"llm_response": self.ErrorMessages.STRUCTURE_RESPONSE_FAILED.format(structure_type=input.structure_type.__name__), "usage": usage}
             
             # Fallback: no function call received for structured output
-            self.logger.warning("Expected structure function call but none received")
-            return {"llm_response": "Failed to generate structured response", "usage": usage}
+            self.logger.warning(self.ErrorMessages.STRUCTURE_FUNCTION_NOT_CALLED.format(structure_type=input.structure_type.__name__))
+            return {"llm_response": self.ErrorMessages.STRUCTURE_RESPONSE_FAILED.format(structure_type=input.structure_type.__name__), "usage": usage}
         else:
             # For unstructured output, use the message content
             return {"llm_response": message.content, "usage": usage}
@@ -645,8 +673,8 @@ The response Must be in JSON format"""
                 # For structured output, we should have received a function call
                 # If no function call was received but structure_type is expected, that's an error
                 if input.structure_type:
-                    self.logger.warning(f"Turn {current_turn}: Expected structure function call but none received")
-                    return {"llm_response": "Failed to generate structured response via function call", "usage": accumulated_usage}
+                    self.logger.warning(f"Turn {current_turn}: {self.ErrorMessages.STRUCTURE_FUNCTION_NOT_CALLED.format(structure_type=input.structure_type.__name__)}")
+                    return {"llm_response": self.ErrorMessages.STRUCTURE_RESPONSE_FAILED.format(structure_type=input.structure_type.__name__), "usage": accumulated_usage}
                 
                 # Return text response (only for non-structured output)
                 if message.content:
@@ -665,7 +693,7 @@ The response Must be in JSON format"""
 
         # Handle max turns reached
         return {
-            "llm_response": "Maximum number of function calling turns reached",
+            "llm_response": self.ErrorMessages.MAX_TURNS_REACHED,
             "usage": accumulated_usage,
         }
     
@@ -696,16 +724,7 @@ The response Must be in JSON format"""
         }
         
         # For structured output, use function calling approach (not JSON mode)
-        if input.structure_type:
-            structure_function = self._create_structure_function(input.structure_type)
-            kwargs["tools"] = [structure_function]
-            
-            # Add structure function instructions
-            function_name = input.structure_type.__name__.lower()
-            messages[0]["content"] += f"""\n\nYou MUST ALWAYS use the {function_name} tool/function to format your response.
-Your response ALWAYS MUST be returned using the tool, independently of what the message or response are.
-You MUST ALWAYS CALL TOOLS FOR RETURNING RESPONSE
-The response Must be in JSON format"""
+        self._prepare_structure_context(input, kwargs, messages)
         
         # Track usage and collected data
         accumulated_usage = None
@@ -902,7 +921,7 @@ The response Must be in JSON format"""
         if current_turn >= input.max_turns:
             self.logger.warning(f"Maximum turns reached: {current_turn} >= {input.max_turns}")
             yield {
-                "llm_response": "Maximum number of function calling turns reached",
+                "llm_response": self.ErrorMessages.MAX_TURNS_REACHED,
                 "usage": accumulated_usage,
             }
         else:
