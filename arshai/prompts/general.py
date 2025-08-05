@@ -12,7 +12,7 @@ def TOOL_USAGE_PROMPT() -> str:
     """
 
 def STRUCTURED_OUTPUT_PROMPT(response_structure: str) -> str:
-    """Generate a prompt that enforces structured output format."""
+
     return f"""
     ### OUTPUT FORMAT REQUIRED:
     Use function calls to format responses according to this structure:
