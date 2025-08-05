@@ -53,27 +53,71 @@ class AzureClient(BaseLLMClient):
     
     def _initialize_client(self) -> Any:
         """
-        Initialize the Azure OpenAI client using environment variables or provided values.
+        Initialize the Azure OpenAI client with safe HTTP configuration.
+        
+        Uses SafeHttpClientFactory to create a client with high connection limits and proper
+        timeouts to prevent httpcore deadlock issues. Falls back gracefully if advanced
+        configuration is not available.
         
         Returns:
-            AzureOpenAI client instance
-            
-        Raises:
-            ValueError: If AZURE_OPENAI_API_KEY is not set in environment variables
+            AzureOpenAI client instance with safe HTTP configuration
         """
-        # Check if API key is available in environment
-        api_key = os.environ.get("AZURE_OPENAI_API_KEY")
-        if not api_key:
-            self.logger.error("Azure OpenAI API key not found in environment variables")
-            raise ValueError(
-                "Azure OpenAI API key not found. Please set AZURE_OPENAI_API_KEY environment variable."
+        try:
+            # Import the safe factory
+            from arshai.clients.utils.safe_http_client import SafeHttpClientFactory
+            
+            self.logger.info("Creating Azure OpenAI client with safe HTTP configuration")
+            
+            # Try to create safe httpx client first
+            import httpx
+            httpx_version = getattr(httpx, '__version__', '0.0.0')
+            
+            # Get safe HTTP configuration
+            limits_config = SafeHttpClientFactory._get_safe_limits_config(httpx_version)
+            timeout_config = SafeHttpClientFactory._get_safe_timeout_config(httpx_version)
+            additional_config = SafeHttpClientFactory._get_additional_httpx_config(httpx_version)
+            
+            safe_http_client = httpx.Client(
+                limits=limits_config,
+                timeout=timeout_config,
+                **additional_config
+            )
+            
+            # Try to create Azure client with safe HTTP client
+            try:
+                client = AzureOpenAI(
+                    azure_deployment=self.azure_deployment,
+                    api_version=self.api_version,
+                    http_client=safe_http_client,
+                    max_retries=3
+                )
+                self.logger.info("Azure OpenAI client created successfully with safe configuration")
+                return client
+            except TypeError as e:
+                if 'http_client' in str(e) or 'max_retries' in str(e):
+                    self.logger.warning("AzureOpenAI does not support http_client or max_retries parameter in this version")
+                    # Close the unused httpx client
+                    safe_http_client.close()
+                    raise
+                else:
+                    raise
+            
+        except ImportError as e:
+            self.logger.warning(f"Safe HTTP client factory not available: {e}, using default Azure client")
+            # Fallback to original implementation
+            return AzureOpenAI(
+                azure_deployment=self.azure_deployment,
+                api_version=self.api_version,
             )
         
-        # AzureOpenAI client reads AZURE_OPENAI_API_KEY from environment automatically
-        return AzureOpenAI(
-            azure_deployment=self.azure_deployment,
-            api_version=self.api_version,
-        )
+        except Exception as e:
+            self.logger.error(f"Failed to create safe Azure OpenAI client: {e}")
+            # Final fallback to ensure system keeps working
+            self.logger.info("Using fallback Azure OpenAI client configuration")
+            return AzureOpenAI(
+                azure_deployment=self.azure_deployment,
+                api_version=self.api_version,
+            )
     
     def _python_function_to_openai_tool(self, func, name: str, function_type: str = "tool") -> Dict[str, Any]:
         """

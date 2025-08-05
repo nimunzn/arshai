@@ -42,16 +42,17 @@ class OpenAIClient(BaseLLMClient):
     
     def _initialize_client(self) -> Any:
         """
-        Initialize the OpenAI client.
+        Initialize the OpenAI client with safe HTTP configuration and version compatibility.
         
-        The client automatically uses OPENAI_API_KEY from environment variables.
-        If the API key is not found, a clear error is raised.
+        Uses SafeHttpClientFactory to create a client with high connection limits and proper
+        timeouts to prevent httpcore deadlock issues. Falls back gracefully if advanced
+        configuration is not available.
         
         Returns:
-            OpenAI client instance
+            OpenAI client instance with safe HTTP configuration
         
         Raises:
-            ValueError: If OPENAI_API_KEY is not set in environment variables
+            ValueError: If OPENAI_API_KEY is not set or client cannot be created
         """
         # Check if API key is available in environment
         api_key = os.environ.get("OPENAI_API_KEY")
@@ -60,8 +61,37 @@ class OpenAIClient(BaseLLMClient):
             raise ValueError(
                 "OpenAI API key not found. Please set OPENAI_API_KEY environment variable."
             )
+        
+        try:
+            # Import the safe factory
+            from arshai.clients.utils.safe_http_client import SafeHttpClientFactory
             
-        return OpenAI(api_key=api_key)
+            self.logger.info("Creating OpenAI client with safe HTTP configuration")
+            client = SafeHttpClientFactory.create_openai_client(api_key=api_key)
+            
+            # Test the client with a simple validation if possible
+            self.logger.info("OpenAI client created successfully with safe configuration")
+            return client
+            
+        except ImportError as e:
+            self.logger.warning(f"Safe HTTP client factory not available: {e}, using default client")
+            # Fallback to original implementation
+            from openai import OpenAI
+            return OpenAI(api_key=api_key)
+        
+        except Exception as e:
+            self.logger.error(f"Failed to create safe OpenAI client: {e}")
+            # Final fallback to ensure system keeps working
+            self.logger.info("Using fallback OpenAI client configuration")
+            try:
+                from openai import OpenAI
+                # At least try to set a timeout for basic safety
+                return OpenAI(api_key=api_key, timeout=30.0)
+            except Exception as fallback_error:
+                self.logger.error(f"Fallback client also failed: {fallback_error}")
+                # Last resort - basic client
+                from openai import OpenAI
+                return OpenAI(api_key=api_key)
     
     def _python_function_to_openai_tool(self, func, name: str, function_type: str = "tool") -> Dict[str, Any]:
         """

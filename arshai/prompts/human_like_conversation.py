@@ -1,5 +1,6 @@
 def HUMAN_LIKE_CONVERSATION_PROMPT() -> str:
     """Generate prompts for human-like conversation."""
+    """Generate prompts for human-like conversation."""
     return """
     ### CONVERSATION STYLE:
     
