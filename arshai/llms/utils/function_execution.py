@@ -7,6 +7,7 @@ and resilient error handling for the Arshai agentic framework.
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from typing import List, Dict, Any, Callable, Set, Optional
 from dataclasses import field
@@ -52,6 +53,8 @@ class StreamingExecutionState:
     executed_functions: Set[str] = None
     completed_functions: List[Dict[str, Any]] = None
     background_initiated: List[str] = None
+    _execution_counter: int = field(default=0, init=False)
+    _start_time: float = field(default_factory=time.time, init=False)
     
     def __post_init__(self):
         """Initialize mutable defaults properly."""
@@ -64,16 +67,26 @@ class StreamingExecutionState:
         if self.background_initiated is None:
             self.background_initiated = []
     
+    def _generate_execution_key(self, function_call: FunctionCall) -> str:
+        """Generate a deterministic execution key for function call tracking."""
+        if function_call.call_id:
+            return f"{function_call.name}_{function_call.call_id}"
+        else:
+            # Fallback: use timestamp + counter for deterministic key
+            self._execution_counter += 1
+            timestamp_ms = int((time.time() - self._start_time) * 1000)
+            return f"{function_call.name}_{timestamp_ms}_{self._execution_counter}"
+    
     def add_function_task(self, task: asyncio.Task, function_call: FunctionCall):
         """Track a new function execution."""
         self.active_function_tasks.append(task)
-        # Mark as executed to prevent duplicates
-        execution_key = f"{function_call.name}_{function_call.call_id or id(function_call)}"
+        # Mark as executed to prevent duplicates using deterministic key
+        execution_key = self._generate_execution_key(function_call)
         self.executed_functions.add(execution_key)
     
     def is_already_executed(self, function_call: FunctionCall) -> bool:
         """Check if function was already executed."""
-        execution_key = f"{function_call.name}_{function_call.call_id or id(function_call)}"
+        execution_key = self._generate_execution_key(function_call)
         return execution_key in self.executed_functions
     
     def clear_for_next_turn(self):
@@ -112,7 +125,7 @@ class FunctionOrchestrator:
         regular_calls = [call for call in execution_input.function_calls if not call.is_background]
         background_calls = [call for call in execution_input.function_calls if call.is_background]
         
-        logger.info(f"Executing {len(regular_calls)} regular functions and {len(background_calls)} background tasks")
+        logger.debug(f"Executing {len(regular_calls)} regular functions and {len(background_calls)} background tasks")
         
         # Initialize result containers
         regular_results = []
@@ -134,7 +147,7 @@ class FunctionOrchestrator:
             background_initiated.extend(bg_messages)
             failed_functions.extend(bg_failures)
         
-        logger.info(f"Execution complete: {len(regular_results)} regular results, {len(background_initiated)} background tasks, {len(failed_functions)} failures")
+        logger.debug(f"Execution complete: {len(regular_results)} regular results, {len(background_initiated)} background tasks, {len(failed_functions)} failures")
         
         return FunctionExecutionResult(
             regular_results=regular_results,
@@ -220,7 +233,7 @@ class FunctionOrchestrator:
             
             if tasks:
                 # Execute all tasks in parallel
-                logger.info(f"Executing {len(tasks)} regular functions in parallel")
+                logger.debug(f"Executing {len(tasks)} regular functions in parallel")
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 
                 # Separate successful results from failures
@@ -343,7 +356,7 @@ class FunctionOrchestrator:
         """Create a task for progressive execution of a background task."""
         async def execute_background():
             try:
-                logger.info(f"Starting progressive background task: {function_call.name}")
+                logger.debug(f"Starting progressive background task: {function_call.name}")
                 
                 # Execute the function
                 if asyncio.iscoroutinefunction(func):
@@ -442,7 +455,7 @@ class FunctionOrchestrator:
                     "error": None
                 })
         
-        logger.info(
+        logger.debug(
             f"Progressive execution complete: {len(regular_results)} regular results, "
             f"{len(background_initiated)} background tasks, {len(failed_functions)} failures"
         )
@@ -467,7 +480,7 @@ class FunctionOrchestrator:
         Returns:
             Success message for the initiated background task
         """
-        logger.info(f"Starting background task: {call.name}")
+        logger.debug(f"Starting background task: {call.name}")
         
         # Create background task
         if asyncio.iscoroutinefunction(func):
