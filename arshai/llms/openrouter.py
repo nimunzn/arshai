@@ -10,6 +10,7 @@ import json
 import time
 import inspect
 from typing import Dict, Any, TypeVar, Type, Union, AsyncGenerator, List
+import asyncio
 from openai import OpenAI
 
 from arshai.core.interfaces.illm import ILLMConfig, ILLMInput
@@ -18,7 +19,7 @@ from arshai.llms.utils import (
     is_json_complete,
     parse_to_structure,
 )
-from arshai.llms.utils.function_execution import FunctionCall, FunctionExecutionInput
+from arshai.llms.utils.function_execution import FunctionCall, FunctionExecutionInput, StreamingExecutionState
 
 T = TypeVar("T")
 
@@ -414,6 +415,7 @@ class OpenRouterClient(BaseLLMClient):
         
         return function_calls, structured_response
 
+
     # ========================================================================
     # FRAMEWORK-REQUIRED ABSTRACT METHODS
     # ========================================================================
@@ -678,10 +680,10 @@ class OpenRouterClient(BaseLLMClient):
                                 is_complete, fixed_json = is_json_complete(current_tool_call["function"]["arguments"])
                                 if is_complete:
                                     try:
-                                        function_args = json.loads(fixed_json)
-                                        structured_response = input.structure_type(**function_args)
+                                        # Use parse_to_structure for consistency
+                                        structured_response = parse_to_structure(fixed_json, input.structure_type)
                                         yield {"llm_response": structured_response}
-                                    except (json.JSONDecodeError, TypeError, ValueError):
+                                    except Exception:
                                         continue
         
         # Final yield with usage information
@@ -717,7 +719,6 @@ class OpenRouterClient(BaseLLMClient):
         
         while current_turn < input.max_turns:
             self.logger.info(f"Stream function calling turn: {current_turn}")
-            has_regular_functions = False
             try:
                 # Prepare arguments for streaming
                 kwargs = {
@@ -729,14 +730,16 @@ class OpenRouterClient(BaseLLMClient):
                     "stream": True,
                 }
                 
-                # Store collected message and tool calls (matching old implementation exactly)
-                collected_message = {"content": "", "tool_calls": []}
+                # Progressive streaming state management
+                streaming_state = StreamingExecutionState()
                 collected_text = ""
                 chunk_count = 0
+                # Track tool calls for progressive processing
+                tool_calls_in_progress = {}
                 
-                self.logger.debug(f"Starting stream processing for turn {current_turn}")
+                self.logger.debug(f"Starting progressive stream processing for turn {current_turn}")
                 
-                # Process streaming response (matching old implementation)
+                # Process streaming response with progressive function execution
                 for chunk in self._client.chat.completions.create(**kwargs):
                     chunk_count += 1
                     # Handle usage metadata
@@ -751,29 +754,28 @@ class OpenRouterClient(BaseLLMClient):
                         continue
                     
                     delta = chunk.choices[0].delta
-                    
+                    self.logger.debug(f"Incomming Delta:{delta}")
                     # Handle content streaming
                     if hasattr(delta, 'content') and delta.content is not None:
-                        collected_message["content"] += delta.content
                         collected_text += delta.content
                         # For structured output, we only yield content via function calls, not direct content
                         if not input.structure_type:
                             yield {"llm_response": collected_text}
                     
-                    # Handle tool calls streaming (EXACT match to old implementation)
+                    # Handle tool calls streaming with progressive execution
                     if hasattr(delta, 'tool_calls') and delta.tool_calls:
                         for tool_delta in delta.tool_calls:
                             # Use the index from the tool_delta, not enumerate (critical for OpenRouter)
                             tool_index = tool_delta.index
                             
-                            # Ensure we have enough slots in the array
-                            while len(collected_message["tool_calls"]) <= tool_index:
-                                collected_message["tool_calls"].append({
+                            # Initialize tool call tracking if needed
+                            if tool_index not in tool_calls_in_progress:
+                                tool_calls_in_progress[tool_index] = {
                                     "id": "",
                                     "function": {"name": "", "arguments": ""}
-                                })
+                                }
                             
-                            current_tool_call = collected_message["tool_calls"][tool_index]
+                            current_tool_call = tool_calls_in_progress[tool_index]
                             
                             # Update tool call with new delta information
                             if tool_delta.id:
@@ -785,51 +787,82 @@ class OpenRouterClient(BaseLLMClient):
                                     
                                 if tool_delta.function.arguments:
                                     current_tool_call["function"]["arguments"] += tool_delta.function.arguments
+                            
+                            if (input.structure_type and 
+                                    current_tool_call["function"]["name"] and 
+                                    current_tool_call["function"]["name"].lower() == input.structure_type.__name__.lower()):
+
+                                    try:
+                                    # For structure functions, double-check JSON completeness
+                                        is_complete, fixed_json = is_json_complete(current_tool_call["function"]["arguments"])
+                                        if not is_complete:
+                                            continue  # Wait for more data
+                                        else:
+                                            # Use parse_to_structure for consistent parsing
+                                            structured_response = parse_to_structure(fixed_json, input.structure_type)
+                                            # Yield the structured response immediately
+                                            yield {"llm_response": structured_response, "usage": accumulated_usage}
+                                            # Mark that we've yielded a structure response
+                                    except Exception as e:
+                                        self.logger.error(f"Failed to parse structure output progressively: {str(e)}")
+
+                            # Progressive execution: check if function is complete
+                            if self._is_function_complete(current_tool_call["function"]):
+                                # Additional check for structure functions - ensure JSON is complete
+                                
+                                function_name = current_tool_call["function"]["name"]
+                                
+                                    # Regular function - execute progressively
+                                function_call = FunctionCall(
+                                    name=function_name,
+                                    args=json.loads(current_tool_call["function"]["arguments"]) if current_tool_call["function"]["arguments"] else {},
+                                    call_id=current_tool_call["id"] or f"{function_name}_{tool_index}",
+                                    is_background=function_name in (input.background_tasks or {})
+                                )
+                                
+                                # Execute progressively if not already executed
+                                if not streaming_state.is_already_executed(function_call):
+                                    self.logger.info(f"Executing function progressively: {function_call.name} in {time.time()}")
+                                    try:
+                                        task = await self._execute_function_progressively(function_call, input)
+                                        streaming_state.add_function_task(task, function_call)
+                                    except Exception as e:
+                                        self.logger.error(f"Progressive execution failed for {function_call.name}: {str(e)}")
                 
-                self.logger.debug(f"Turn {current_turn}: Stream ended. Processed {chunk_count} chunks. Tool calls: {len(collected_message['tool_calls'])}, Text collected: {len(collected_text)} chars")
+                self.logger.debug(f"Turn {current_turn}: Stream ended. Processed {chunk_count} chunks. "
+                               f"Tool calls: {len(tool_calls_in_progress)}, Text collected: {len(collected_text)} chars, "
+                               f"Progressive tasks: {len(streaming_state.active_function_tasks)}")
                 
-                # Process function calls if any were collected (matching old implementation)
-                if collected_message["tool_calls"]:
-                    # Create mock tool calls for processing (exact match to old implementation)
-                    class MockToolCall:
-                        def __init__(self, tc_dict):
-                            self.id = tc_dict["id"]
-                            self.function = type('obj', (object,), {
-                                'name': tc_dict["function"]["name"],
-                                'arguments': tc_dict["function"]["arguments"]
-                            })()
+                # Progressive streaming: gather results from executed functions
+                if streaming_state.active_function_tasks:
+                    self.logger.info(f"Gathering results from {len(streaming_state.active_function_tasks)} progressive function executions")
                     
-                    mock_tool_calls = [MockToolCall(tc) for tc in collected_message["tool_calls"] if tc["function"]["name"]]
-                    self.logger.info(f"Functions to call: {len(mock_tool_calls)}")
+                    # Gather progressive execution results
+                    execution_result = await self._gather_progressive_results(streaming_state.active_function_tasks)
                     
-                    # Process function calls for orchestrator
-                    function_calls, structured_response = self._process_function_calls_for_orchestrator(mock_tool_calls, input)
+                    # Add failed functions to context for model awareness
+                    if execution_result.get('failed_functions'):
+                        self._add_failed_functions_to_context(execution_result['failed_functions'], [])
+                        # Convert messages to content list for failed function context
+                        context_messages = []
+                        for msg in messages:
+                            if isinstance(msg, dict) and 'content' in msg:
+                                context_messages.append(msg['content'])
+                        self._add_failed_functions_to_context(execution_result['failed_functions'], context_messages)
+                        # Update messages with context
+                        if context_messages:
+                            messages.append({"role": "user", "content": context_messages[-1]})
                     
-                    # If we got a structured response, yield it and break
-                    if structured_response is not None:
-                        yield {"llm_response": structured_response, "usage": accumulated_usage}
-                        break
                     
-                    # Execute functions via orchestrator using new object-based approach
-                    if function_calls:
-                        # Create execution input
-                        execution_input = FunctionExecutionInput(
-                            function_calls=function_calls,
-                            available_functions=input.callable_functions or {},
-                            available_background_tasks=input.background_tasks or {}
-                        )
-                        
-                        execution_result = await self._execute_functions_with_orchestrator(execution_input)
-                        
-                        # Add function results to conversation
-                        self._add_function_results_to_messages(execution_result, messages)
-                        
-                        # Continue if we have regular functions
-                        regular_function_calls = [call for call in function_calls if not call.is_background]
-                        if regular_function_calls:
-                            has_regular_functions = True
-                            current_turn += 1
-                            continue
+                    # Add function results to conversation
+                    self._add_function_results_to_messages(execution_result, messages)
+                    
+                    # Check if we have regular function calls that require conversation continuation
+                    regular_results = execution_result.get('regular_results', [])
+                    if regular_results:
+                        current_turn += 1
+                        continue
+                
                 
                 # Stream completed for this turn
                 self.logger.debug(f"Turn {current_turn}: Stream completed")

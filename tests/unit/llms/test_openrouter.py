@@ -553,6 +553,7 @@ class TestOpenRouterClient:
         content_chunks_received = 0
         
         async for chunk in client.stream(stream_input):
+            logger.info(f"Stream Chunk: {chunk}")
             stream_chunks.append(chunk)
             if chunk.get("llm_response") and chunk["llm_response"] is not None:
                 content_chunks_received += 1

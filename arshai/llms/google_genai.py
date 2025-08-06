@@ -8,7 +8,6 @@ implementation as mentioned in CLAUDE.md.
 
 import os
 import time
-import asyncio
 from typing import Dict, Any, TypeVar, Type, Union, AsyncGenerator, List
 from google.oauth2 import service_account
 import google.genai as genai
@@ -28,7 +27,7 @@ from arshai.llms.utils import (
     is_json_complete,
     parse_to_structure,
 )
-from arshai.llms.utils.function_execution import FunctionCall, FunctionExecutionInput
+from arshai.llms.utils.function_execution import FunctionCall, FunctionExecutionInput, StreamingExecutionState
 
 T = TypeVar("T")
 
@@ -678,14 +677,16 @@ class GeminiClient(BaseLLMClient):
                     config=self._create_generation_config(input.structure_type, tools),
                 )
                 
-                # Store collected data for processing
-                function_calls = []
+                # Progressive streaming state management
+                streaming_state = StreamingExecutionState()
                 collected_text = ""
                 chunk_count = 0
+                # Track tool calls for progressive processing
+                tool_calls_in_progress = {}
+                
+                self.logger.debug(f"Starting progressive stream processing for turn {current_turn}")
 
-                self.logger.debug(f"Starting stream processing for turn {current_turn}")
-
-                # Process streaming response - collect function calls and text
+                # Process streaming response with progressive function execution
                 for chunk in stream:
                     chunk_count += 1
                     
@@ -709,59 +710,76 @@ class GeminiClient(BaseLLMClient):
                             if is_complete:
                                 try:
                                     final_response = parse_to_structure(fixed_json, input.structure_type)
-                                    yield {"llm_response": final_response}
+                                    yield {"llm_response": final_response, "usage": accumulated_usage}
                                 except ValueError:
                                     pass
                     
-                    # Collect function calls for batch processing
+                    # Handle function calls with progressive execution
                     if hasattr(chunk, "function_calls") and chunk.function_calls:
-                        function_calls.extend(chunk.function_calls)
+                        for i, func_call in enumerate(chunk.function_calls):
+                            # For Gemini, function calls arrive complete in chunks
+                            # Track them in progress similar to OpenRouter pattern
+                            call_index = len(tool_calls_in_progress)
+                            
+                            if call_index not in tool_calls_in_progress:
+                                tool_calls_in_progress[call_index] = {
+                                    "name": func_call.name,
+                                    "args": dict(func_call.args) if hasattr(func_call, 'args') and func_call.args else {},
+                                    "id": f"{func_call.name}_{call_index}"
+                                }
+                            
+                            current_tool_call = tool_calls_in_progress[call_index]
+                            function_name = current_tool_call["name"]
+                            function_args = current_tool_call["args"]
+                            
+                            # Progressive execution: function is complete for Gemini
+                            # Create function call object for progressive execution
+                            function_call = FunctionCall(
+                                name=function_name,
+                                args=function_args,
+                                call_id=current_tool_call["id"],
+                                is_background=function_name in (input.background_tasks or {})
+                            )
+                            
+                            # Execute progressively if not already executed
+                            if not streaming_state.is_already_executed(function_call):
+                                self.logger.info(f"Executing function progressively: {function_call.name} at {time.time()}")
+                                try:
+                                    task = await self._execute_function_progressively(function_call, input)
+                                    streaming_state.add_function_task(task, function_call)
+                                except Exception as e:
+                                    self.logger.error(f"Progressive execution failed for {function_call.name}: {str(e)}")
 
-                self.logger.debug(f"Turn {current_turn}: Stream ended. Processed {chunk_count} chunks. Function calls: {len(function_calls)}, Text collected: {len(collected_text)} chars")
+                self.logger.debug(f"Turn {current_turn}: Stream ended. Processed {chunk_count} chunks. "
+                               f"Tool calls: {len(tool_calls_in_progress)}, Text collected: {len(collected_text)} chars, "
+                               f"Progressive tasks: {len(streaming_state.active_function_tasks)}")
 
-                # Process function calls if any were collected
-                if function_calls:
-                    # Process function calls for orchestrator
-                    function_calls_list, structured_response = self._process_function_calls_for_orchestrator(function_calls, input)
+                # Progressive streaming: gather results from executed functions
+                if streaming_state.active_function_tasks:
+                    self.logger.info(f"Gathering results from {len(streaming_state.active_function_tasks)} progressive function executions")
                     
-                    # If we got a structured response, yield it and break
-                    if structured_response is not None:
-                        yield {"llm_response": structured_response, "usage": accumulated_usage}
-                        break
+                    # Gather progressive execution results
+                    execution_result = await self._gather_progressive_results(streaming_state.active_function_tasks)
                     
-                    # Execute functions via orchestrator using new object-based approach
-                    if function_calls_list:
-                        # Create execution input
-                        execution_input = FunctionExecutionInput(
-                            function_calls=function_calls_list,
-                            available_functions=input.callable_functions or {},
-                            available_background_tasks=input.background_tasks or {}
-                        )
-                        
-                        execution_result = await self._execute_functions_with_orchestrator(execution_input)
-                        
-                        # Add function results to conversation
-                        self._add_function_results_to_contents(execution_result, contents)
-                        
-                        # Continue if we have regular functions
-                        regular_function_calls = [call for call in function_calls_list if not call.is_background]
-                        if regular_function_calls:
-                            current_turn += 1
-                            continue
-                
-                # Handle text response after processing function calls
-                if collected_text and not function_calls:
-                    # We have text response and no function calls - this is final
-                    if input.structure_type:
-                        try:
-                            final_response = parse_to_structure(collected_text, input.structure_type)
-                            yield {"llm_response": final_response, "usage": accumulated_usage}
-                        except ValueError as e:
-                            self.logger.warning(f"Structured parsing failed: {str(e)}")
-                            yield {"llm_response": collected_text, "usage": accumulated_usage}
-                    else:
-                        yield {"llm_response": collected_text, "usage": accumulated_usage}
-                    break
+                    # Add failed functions to context for model awareness
+                    if execution_result.get('failed_functions'):
+                        context_messages = []
+                        for msg in contents:
+                            if isinstance(msg, str):
+                                context_messages.append(msg)
+                        self._add_failed_functions_to_context(execution_result['failed_functions'], context_messages)
+                        # Update contents with context
+                        if context_messages:
+                            contents.append(context_messages[-1])
+                    
+                    # Add function results to conversation
+                    self._add_function_results_to_contents(execution_result, contents)
+                    
+                    # Check if we have regular function calls that require conversation continuation
+                    regular_results = execution_result.get('regular_results', [])
+                    if regular_results:
+                        current_turn += 1
+                        continue
                 
                 # Stream completed for this turn
                 self.logger.debug(f"Turn {current_turn}: Stream completed")

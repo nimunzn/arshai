@@ -9,6 +9,7 @@ structured output, and usage tracking.
 This is the template that all LLM providers should inherit from.
 """
 
+import asyncio
 import logging
 import traceback
 import warnings
@@ -477,3 +478,152 @@ class BaseLLMClient(ILLM, ABC):
             timeout: Maximum time to wait in seconds
         """
         await self._function_orchestrator.wait_for_background_tasks(timeout)
+
+    # ========================================================================
+    # PROGRESSIVE STREAMING METHODS (NEW) - Available to all providers  
+    # ========================================================================
+    
+    def _is_function_complete(self, function_data: Dict[str, Any]) -> bool:
+        """
+        Check if function is complete and ready for execution during streaming.
+        
+        Uses JSON validation to determine if function arguments are complete.
+        This approach is universal across all providers.
+        
+        Args:
+            function_data: Function data with name and arguments
+            
+        Returns:
+            True if function is complete and ready for execution
+        """
+        # Basic requirements check (minimum safety)
+        if not (function_data.get("name") and "arguments" in function_data):
+            return False
+        
+        try:
+            import json
+            if isinstance(function_data["arguments"], str):
+                 json.loads(function_data["arguments"])  # Valid JSON = complete
+                 return True
+            elif isinstance(function_data["arguments"], dict):
+                  return True  # Already parsed = complete
+        except json.JSONDecodeError:
+              return False  # Still streaming arguments
+        return False
+    
+    async def _execute_function_progressively(
+        self,
+        function_call: FunctionCall,
+        input: ILLMInput
+    ) -> asyncio.Task:
+        """
+        Execute a single function progressively and return the task.
+        
+        This method enables real-time function execution during streaming,
+        providing better user experience and resource utilization.
+        
+        Args:
+            function_call: The function call to execute
+            input: The LLM input containing available functions
+            
+        Returns:
+            asyncio.Task that can be awaited later for the result
+        """
+        return await self._function_orchestrator.execute_function_progressively(
+            function_call,
+            input.callable_functions or {},
+            input.background_tasks or {}
+        )
+    
+    async def _gather_progressive_results(self, function_tasks: List[asyncio.Task]) -> Dict[str, Any]:
+        """
+        Gather results from progressively executed functions.
+        
+        Args:
+            function_tasks: List of tasks from progressive execution
+            
+        Returns:
+            Dict containing consolidated results in standardized format
+        """
+        try:
+            result = await self._function_orchestrator.gather_progressive_results(function_tasks)
+            
+            # Convert to dict format for provider compatibility
+            return {
+                "regular_results": result.regular_results,
+                "background_initiated": result.background_initiated,
+                "failed_functions": result.failed_functions
+            }
+        except Exception as e:
+            self.logger.error(f"Progressive function gathering failed: {str(e)}")
+            self.logger.error(traceback.format_exc())
+            return {
+                "regular_results": [],
+                "background_initiated": [],
+                "failed_functions": [{
+                    "name": "gather_error",
+                    "args": {},
+                    "error": str(e),
+                    "call_id": None
+                }]
+            }
+    
+    def _add_failed_functions_to_context(self, failed_functions: List[Dict[str, Any]], contents: List[str]):
+        """
+        Add failed function context messages for the model with safeguards.
+        
+        This helps the model understand what went wrong and provide
+        appropriate fallback responses or error handling.
+        
+        Includes safeguards for:
+        - Duplicate message prevention
+        - Context length limits
+        - Message truncation for large arguments
+        
+        Args:
+            failed_functions: List of failed function results
+            contents: Contents list to add context messages to
+        """
+        if not failed_functions:
+            return
+        
+        # Track added messages to prevent duplicates
+        added_messages = set()
+        max_context_messages = 10  # Limit context bloat
+        max_arg_length = 200  # Truncate long arguments
+        
+        messages_added = 0
+        for failed in failed_functions:
+            if messages_added >= max_context_messages:
+                self.logger.info(f"Reached maximum context messages limit ({max_context_messages}), skipping remaining failures")
+                break
+            
+            # Create unique key for deduplication
+            failure_key = f"{failed['name']}_{failed.get('call_id', 'no_id')}"
+            if failure_key in added_messages:
+                continue  # Skip duplicate
+            
+            # Truncate arguments if too long
+            args_str = str(failed['args'])
+            if len(args_str) > max_arg_length:
+                args_str = args_str[:max_arg_length] + "... (truncated)"
+            
+            # Truncate error message if too long
+            error_str = str(failed['error'])
+            if len(error_str) > max_arg_length:
+                error_str = error_str[:max_arg_length] + "... (truncated)"
+            
+            context_msg = (
+                f"Function '{failed['name']}' called with arguments {args_str} "
+                f"failed with error: {error_str}. Please handle this gracefully "
+                f"and provide an appropriate response or fallback."
+            )
+            
+            contents.append(context_msg)
+            added_messages.add(failure_key)
+            messages_added += 1
+            
+            self.logger.warning(f"Added failure context for {failed['name']}: {error_str[:100]}{'...' if len(str(failed['error'])) > 100 else ''}")
+        
+        if messages_added > 0:
+            self.logger.info(f"Added {messages_added} failure context messages to conversation")

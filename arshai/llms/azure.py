@@ -20,7 +20,7 @@ from arshai.llms.utils import (
     parse_to_structure,
     convert_typeddict_to_basemodel,
 )
-from arshai.llms.utils.function_execution import FunctionCall, FunctionExecutionInput
+from arshai.llms.utils.function_execution import FunctionCall, FunctionExecutionInput, StreamingExecutionState
 
 T = TypeVar("T")
 
@@ -687,14 +687,16 @@ class AzureClient(BaseLLMClient):
                 # Generate streaming content with tools using responses API
                 with self._client.responses.stream(**kwargs) as stream:
                     
-                    # Store function calls collected during streaming
-                    function_calls = []
+                    # Progressive streaming state management
+                    streaming_state = StreamingExecutionState()
                     collected_text = ""
                     chunk_count = 0
+                    # Track function calls for progressive processing
+                    tool_calls_in_progress = {}
 
-                    self.logger.debug(f"Starting stream processing for turn {current_turn}")
+                    self.logger.debug(f"Starting progressive stream processing for turn {current_turn}")
 
-                    # Process streaming response events
+                    # Process streaming response events with progressive function execution
                     for event in stream:
                         chunk_count += 1                        
                         # Handle usage metadata from response completion events
@@ -704,10 +706,67 @@ class AzureClient(BaseLLMClient):
                             )
                             accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
                         
-                        # Handle function call arguments completion  
+                        # Handle function call arguments completion with progressive execution
                         if event.type == "response.output_item.done" and event.item.type == 'function_call':
-                            # Collect function calls for unified processing
-                            function_calls.append(event.item)
+                            # For Azure, function calls arrive complete in events
+                            # Track them for progressive execution similar to OpenRouter pattern
+                            call_index = len(tool_calls_in_progress)
+                            
+                            if call_index not in tool_calls_in_progress:
+                                tool_calls_in_progress[call_index] = {
+                                    "function": {
+                                        "name": event.item.name,
+                                        "arguments": event.item.arguments if hasattr(event.item, 'arguments') else "{}"
+                                    },
+                                    "id": f"{event.item.name}_{call_index}"
+                                }
+                            
+                            current_tool_call = tool_calls_in_progress[call_index]
+                            
+                            # Check if this is a structure output function
+                            if (input.structure_type and 
+                                current_tool_call["function"]["name"] and 
+                                current_tool_call["function"]["name"].lower() == input.structure_type.__name__.lower()):
+                                # Handle structure output separately - yield immediately
+                                try:
+                                    if isinstance(current_tool_call["function"]["arguments"], str):
+                                        structured_response = parse_to_structure(current_tool_call["function"]["arguments"], input.structure_type)
+                                    else:
+                                        structured_response = parse_to_structure(json.dumps(current_tool_call["function"]["arguments"]), input.structure_type)
+                                    yield {"llm_response": structured_response, "usage": accumulated_usage}
+                                except Exception as e:
+                                    self.logger.error(f"Failed to parse structure output progressively: {str(e)}")
+                                continue
+                            
+                            # Progressive execution: check if function is complete (Azure functions arrive complete)
+                            if self._is_function_complete(current_tool_call["function"]):
+                                function_name = current_tool_call["function"]["name"]
+                                
+                                # Parse arguments if string
+                                if isinstance(current_tool_call["function"]["arguments"], str):
+                                    try:
+                                        function_args = json.loads(current_tool_call["function"]["arguments"])
+                                    except json.JSONDecodeError:
+                                        function_args = {}
+                                else:
+                                    function_args = current_tool_call["function"]["arguments"]
+                                
+                                # Regular function - execute progressively
+                                function_call = FunctionCall(
+                                    name=function_name,
+                                    args=function_args,
+                                    call_id=current_tool_call["id"],
+                                    is_background=function_name in (input.background_tasks or {})
+                                )
+                                
+                                # Execute progressively if not already executed
+                                if not streaming_state.is_already_executed(function_call):
+                                    self.logger.info(f"Executing function progressively: {function_call.name} at {time.time()}")
+                                    try:
+                                        task = await self._execute_function_progressively(function_call, input)
+                                        streaming_state.add_function_task(task, function_call)
+                                    except Exception as e:
+                                        self.logger.error(f"Progressive execution failed for {function_call.name}: {str(e)}")
                                         
                         # Handle text content from ResponseContentPartDoneEvent (for final responses)
                         if "response.output_text.delta" in event.type and hasattr(event, "delta"):
@@ -719,42 +778,45 @@ class AzureClient(BaseLLMClient):
                                 if is_complete:
                                     try:
                                         final_response = parse_to_structure(fixed_json, input.structure_type)
-                                        yield {"llm_response": final_response}
+                                        yield {"llm_response": final_response, "usage": accumulated_usage}
                                     except ValueError:
                                         pass
                         
-                    self.logger.debug(f"Turn {current_turn}: Stream ended. Processed {chunk_count} chunks. Function calls: {len(function_calls)}, Text collected: {len(collected_text)} chars")
+                    self.logger.debug(f"Turn {current_turn}: Stream ended. Processed {chunk_count} chunks. "
+                                   f"Tool calls: {len(tool_calls_in_progress)}, Text collected: {len(collected_text)} chars, "
+                                   f"Progressive tasks: {len(streaming_state.active_function_tasks)}")
 
-                    # Process function calls if any were collected
-                    if function_calls:
-                        # Process function calls for orchestrator
-                        function_calls_list, structured_response = self._process_function_calls_for_orchestrator(function_calls, input)
+                    # Progressive streaming: gather results from executed functions
+                    if streaming_state.active_function_tasks:
+                        self.logger.info(f"Gathering results from {len(streaming_state.active_function_tasks)} progressive function executions")
                         
-                        # If we got a structured response, yield it and break
-                        if structured_response is not None:
-                            yield {"llm_response": structured_response, "usage": accumulated_usage}
-                            break
+                        # Gather progressive execution results
+                        execution_result = await self._gather_progressive_results(streaming_state.active_function_tasks)
                         
-                        # Execute functions via orchestrator using new object-based approach
-                        if function_calls_list:
-                            # Create execution input
-                            execution_input = FunctionExecutionInput(
-                                function_calls=function_calls_list,
-                                available_functions=input.callable_functions or {},
-                                available_background_tasks=input.background_tasks or {}
-                            )
-                            
-                            execution_result = await self._execute_functions_with_orchestrator(execution_input)
-                            
-                            # Add function results to conversation
-                            self._add_function_results_to_response_input(execution_result, response_input)
-                            
-                            # Continue if we have regular functions
-                            regular_function_calls = [call for call in function_calls_list if not call.is_background]
-                            if regular_function_calls:
-                                has_regular_functions = True
-                                current_turn += 1
-                                continue
+                        # Add failed functions to context for model awareness
+                        if execution_result.get('failed_functions'):
+                            context_messages = []
+                            for msg in response_input:
+                                if isinstance(msg, dict) and 'content' in msg:
+                                    context_messages.append(msg['content'])
+                            self._add_failed_functions_to_context(execution_result['failed_functions'], context_messages)
+                            # Update response_input with context
+                            if context_messages:
+                                response_input.append({
+                                    "type": "message",
+                                    "role": "user",
+                                    "content": context_messages[-1]
+                                })
+                        
+                        # Add function results to conversation
+                        self._add_function_results_to_response_input(execution_result, response_input)
+                        
+                        # Check if we have regular function calls that require conversation continuation
+                        regular_results = execution_result.get('regular_results', [])
+                        if regular_results:
+                            has_regular_functions = True
+                            current_turn += 1
+                            continue
                 
                 # Stream completed for this turn
                 self.logger.debug(f"Turn {current_turn}: Stream completed")
