@@ -1,33 +1,51 @@
 """
-Base LLM Client implementation.
+Base LLM Client implementation - Version 2.
 
-Provides common functionality and standardized patterns that all LLM clients
-should inherit from. Implements the routing logic and helper methods while
-leaving provider-specific implementations as abstract methods.
+Provides a comprehensive framework-standardized base class that serves as the 
+contributor's guide for implementing new LLM providers. Handles all framework 
+requirements including dual interface support, function calling, background tasks,
+structured output, and usage tracking.
+
+This is the template that all LLM providers should inherit from.
 """
 
 import logging
 import traceback
+import warnings
 from abc import ABC, abstractmethod
-from typing import Dict, Any, TypeVar, Union, AsyncGenerator, List
+from typing import Dict, Any, TypeVar, Union, AsyncGenerator, List, Type, Optional
 
 from arshai.core.interfaces.illm import ILLM, ILLMConfig, ILLMInput
-from arshai.llms.utils import FunctionOrchestrator
+from arshai.llms.utils.function_execution import FunctionOrchestrator, FunctionExecutionInput, FunctionCall, StreamingExecutionState
 
 T = TypeVar("T")
 
 
 class BaseLLMClient(ILLM, ABC):
     """
-    Base implementation for all LLM clients.
+    Framework-standardized base class for all LLM clients.
     
-    Provides standardized routing, error handling, and common functionality
-    while requiring providers to implement their specific methods.
+    This class serves as the contributor's guide and template for implementing
+    new LLM providers. It handles all framework requirements while requiring
+    providers to implement only their specific API integration methods.
+    
+    Framework Features Handled by Base Class:
+    - Dual interface support (old + new methods with deprecation)
+    - Function calling orchestration (regular + background tasks)  
+    - Structured output handling
+    - Usage tracking standardization
+    - Error handling and resilience
+    - Routing logic between simple and complex cases
+    
+    What Contributors Need to Implement:
+    - Provider-specific API client initialization
+    - Provider-specific chat/stream methods
+    - Provider-specific format conversions
     """
 
     def __init__(self, config: ILLMConfig):
         """
-        Initialize the base LLM client.
+        Initialize the base LLM client with framework infrastructure.
         
         Args:
             config: LLM configuration
@@ -35,8 +53,7 @@ class BaseLLMClient(ILLM, ABC):
         self.config = config
         self.logger = logging.getLogger(self.__class__.__name__)
 
-        # Shared infrastructure
-        self._background_tasks: set = set()
+        # Framework infrastructure
         self._function_orchestrator = FunctionOrchestrator()
 
         self.logger.info(f"Initializing {self.__class__.__name__} with model: {self.config.model}")
@@ -44,47 +61,81 @@ class BaseLLMClient(ILLM, ABC):
         # Initialize the provider-specific client
         self._client = self._initialize_client()
 
-    # Abstract methods that providers must implement
-    @abstractmethod
-    def _initialize_client(self) -> Any:
-        """Initialize the LLM provider client."""
-        pass
+    # ========================================================================
+    # ABSTRACT METHODS - What contributors must implement
+    # ========================================================================
 
     @abstractmethod
-    def _convert_functions_to_llm_format(
-        self, 
-        functions: Union[List[Dict], Dict[str, Any]], 
-        function_type: str = "tool"
-    ) -> List[Any]:
-        """Convert functions to LLM provider-specific format."""
+    def _initialize_client(self) -> Any:
+        """
+        Initialize the LLM provider client.
+        
+        Returns:
+            Provider-specific client instance
+        """
         pass
 
     @abstractmethod
     async def _chat_simple(self, input: ILLMInput) -> Dict[str, Any]:
-        """Handle simple chat without tools or background tasks."""
+        """
+        Handle simple chat without tools or background tasks.
+        
+        Args:
+            input: LLM input with system_prompt, user_message, optional structure_type
+            
+        Returns:
+            Dict with 'llm_response' and 'usage' keys
+        """
         pass
 
     @abstractmethod
-    async def _chat_with_tools(self, input: ILLMInput) -> Dict[str, Any]:
-        """Handle complex chat with tools and/or background tasks."""
+    async def _chat_with_functions(self, input: ILLMInput) -> Dict[str, Any]:
+        """
+        Handle complex chat with tools and/or background tasks.
+        
+        Args:
+            input: LLM input with tools_list, callable_functions, background_tasks
+            
+        Returns:
+            Dict with 'llm_response' and 'usage' keys
+        """
         pass
 
     @abstractmethod
     async def _stream_simple(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
-        """Handle simple streaming without tools or background tasks."""
+        """
+        Handle simple streaming without tools or background tasks.
+        
+        Args:
+            input: LLM input with system_prompt, user_message, optional structure_type
+            
+        Yields:
+            Dict with 'llm_response' and optional 'usage' keys
+        """
         pass
 
     @abstractmethod
-    async def _stream_with_tools(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
-        """Handle complex streaming with tools and/or background tasks."""
+    async def _stream_with_functions(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Handle complex streaming with tools and/or background tasks.
+        
+        Args:
+            input: LLM input with tools_list, callable_functions, background_tasks
+            
+        Yields:
+            Dict with 'llm_response' and optional 'usage' keys
+        """
         pass
 
-    # Standard implementations (can be overridden if needed)
+    # ========================================================================
+    # FRAMEWORK HELPER METHODS - Available to all providers
+    # ========================================================================
+
     def _needs_function_calling(self, input: ILLMInput) -> bool:
         """
         Determine if function calling is needed based on input.
         
-        Standard implementation that checks for tools and background tasks.
+        Framework-standardized logic that all providers should use.
         
         Args:
             input: The LLM input to evaluate
@@ -96,67 +147,333 @@ class BaseLLMClient(ILLM, ABC):
         has_background_tasks = input.background_tasks and len(input.background_tasks) > 0
         return has_tools or has_background_tasks
 
-    # Standard routing methods
+    def _has_structured_output(self, input: ILLMInput) -> bool:
+        """
+        Check if structured output is requested.
+        
+        Args:
+            input: The LLM input to evaluate
+            
+        Returns:
+            True if structure_type is specified
+        """
+        return input.structure_type is not None
+
+    async def _execute_functions_with_orchestrator(
+        self,
+        execution_input_or_legacy: Union[FunctionExecutionInput, Dict[str, Any]],
+        regular_args: Dict[str, Dict[str, Any]] = None,
+        background_tasks: Dict[str, Any] = None,
+        background_args: Dict[str, Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Execute functions using the framework's standardized orchestrator.
+        
+        Supports both new object-based approach and legacy dictionary approach for backward compatibility.
+        
+        Args:
+            execution_input_or_legacy: Either FunctionExecutionInput (new) or regular_functions dict (legacy)
+            regular_args: Dict of arguments for regular functions (legacy only)
+            background_tasks: Dict of background task functions (legacy only) 
+            background_args: Dict of arguments for background tasks (legacy only)
+            
+        Returns:
+            Orchestrator execution result in generic format
+        """
+        # Check if we're using the new object-based approach
+        if isinstance(execution_input_or_legacy, FunctionExecutionInput):
+            # New object-based approach
+            execution_input = execution_input_or_legacy
+        else:
+            # Legacy dictionary approach - convert to new format
+            regular_functions = execution_input_or_legacy
+            execution_input = FunctionExecutionInput(
+                function_calls=[],  # Will be populated below
+                available_functions=regular_functions,
+                available_background_tasks=background_tasks or {}
+            )
+            
+            # Convert dictionaries to FunctionCall objects
+            function_calls = []
+            
+            # Convert regular functions
+            for name, func in regular_functions.items():
+                args = regular_args.get(name, {}) if regular_args else {}
+                function_calls.append(FunctionCall(
+                    name=name,
+                    args=args,
+                    is_background=False
+                ))
+            
+            # Convert background tasks
+            if background_tasks:
+                for name, func in background_tasks.items():
+                    args = background_args.get(name, {}) if background_args else {}
+                    function_calls.append(FunctionCall(
+                        name=name,
+                        args=args,
+                        is_background=True
+                    ))
+            
+            execution_input.function_calls = function_calls
+        
+        result = await self._function_orchestrator.execute_functions(execution_input)
+        
+        # Convert to dict format for easier handling by providers
+        return {
+            "regular_results": result.regular_results,
+            "background_initiated": result.background_initiated,
+            "failed_functions": result.failed_functions
+        }
+
+    def _standardize_usage_metadata(self, raw_usage: Any, provider: str, model: str, request_id: str = None) -> Dict[str, Any]:
+        """
+        Standardize usage metadata to framework format.
+        
+        Framework-standardized usage format that all providers should return.
+        
+        Args:
+            raw_usage: Provider-specific usage metadata
+            provider: Provider name (e.g., "openai", "gemini")
+            model: Model name used
+            request_id: Optional request ID from provider
+            
+        Returns:
+            Standardized usage metadata dict
+        """
+        if not raw_usage:
+            return {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "thinking_tokens": 0,
+                "tool_calling_tokens": 0,
+                "provider": provider,
+                "model": model,
+                "request_id": request_id
+            }
+
+        # Extract standard fields (providers should override this method if needed)
+        input_tokens = getattr(raw_usage, 'prompt_tokens', 0) or getattr(raw_usage, 'input_tokens', 0)
+        output_tokens = getattr(raw_usage, 'completion_tokens', 0) or getattr(raw_usage, 'output_tokens', 0)
+        total_tokens = getattr(raw_usage, 'total_tokens', input_tokens + output_tokens)
+        
+        # Optional advanced fields
+        thinking_tokens = getattr(raw_usage, 'reasoning_tokens', 0) or getattr(raw_usage, 'thinking_tokens', 0)
+        tool_calling_tokens = getattr(raw_usage, 'tool_calling_tokens', 0) or getattr(raw_usage, 'function_call_tokens', 0)
+
+        return {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+            "thinking_tokens": thinking_tokens,
+            "tool_calling_tokens": tool_calling_tokens,
+            "provider": provider,
+            "model": model,
+            "request_id": request_id
+        }
+
+    def _get_provider_name(self) -> str:
+        """Get the provider name for logging and usage tracking."""
+        return self.__class__.__name__.replace("Client", "").lower()
+
+    # ========================================================================
+    # PUBLIC INTERFACE - NEW METHODS (Framework Standard)
+    # ========================================================================
+
     async def chat(self, input: ILLMInput) -> Dict[str, Any]:
         """
-        Process a chat message with optional tools and structured output.
+        Process a chat message with optional tools, background tasks, and structured output.
         
-        Standard routing implementation that delegates to provider-specific methods.
+        This is the main chat method that handles all cases. Framework handles
+        routing to appropriate provider-specific methods.
 
         Args:
             input: The LLM input containing system prompt, user message, tools, and options
 
         Returns:
-            Dict containing the LLM response and usage information
+            Dict containing 'llm_response' and 'usage' keys
         """
         try:
+            self.logger.info(f"Processing chat request - Tools: {bool(input.tools_list)}, "
+                           f"Background: {bool(input.background_tasks)}, "
+                           f"Structured: {bool(input.structure_type)}")
+
             # Route to appropriate handler based on function calling needs
             if self._needs_function_calling(input):
-                return await self._chat_with_tools(input)
+                return await self._chat_with_functions(input)
             else:
                 return await self._chat_simple(input)
+
         except Exception as e:
             self.logger.error(f"Error in {self.__class__.__name__} chat: {str(e)}")
             self.logger.error(traceback.format_exc())
-            return {"llm_response": f"An error occurred: {str(e)}", "usage": None}
+            return {
+                "llm_response": f"An error occurred: {str(e)}", 
+                "usage": self._standardize_usage_metadata(None, self._get_provider_name(), self.config.model)
+            }
 
     async def stream(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        Process a streaming chat message with optional tools and structured output.
+        Process a streaming chat message with optional tools, background tasks, and structured output.
         
-        Standard routing implementation that delegates to provider-specific methods.
+        This is the main streaming method that handles all cases. Framework handles
+        routing to appropriate provider-specific methods.
 
         Args:
             input: The LLM input containing system prompt, user message, tools, and options
 
         Yields:
-            Dict containing streaming response chunks and usage information
+            Dict containing 'llm_response' and optional 'usage' keys
         """
         try:
+            self.logger.info(f"Processing stream request - Tools: {bool(input.tools_list)}, "
+                           f"Background: {bool(input.background_tasks)}, "
+                           f"Structured: {bool(input.structure_type)}")
+
             if self._needs_function_calling(input):
-                async for chunk in self._stream_with_tools(input):
+                async for chunk in self._stream_with_functions(input):
                     yield chunk
             else:
                 async for chunk in self._stream_simple(input):
                     yield chunk
+
         except Exception as e:
             self.logger.error(f"Error in {self.__class__.__name__} stream: {str(e)}")
             self.logger.error(traceback.format_exc())
-            yield {"llm_response": f"An error occurred: {str(e)}", "usage": None}
+            yield {
+                "llm_response": f"An error occurred: {str(e)}", 
+                "usage": self._standardize_usage_metadata(None, self._get_provider_name(), self.config.model)
+            }
 
-    # Helper methods for common operations
+    # ========================================================================
+    # PUBLIC INTERFACE - DEPRECATED METHODS (Backward Compatibility)
+    # ========================================================================
+
+    async def chat_with_tools(self, input: ILLMInput) -> Union[Dict[str, Any], str]:
+        """
+        DEPRECATED: Use chat() instead.
+        
+        Process a chat message with tools. Maintained for backward compatibility.
+        
+        Args:
+            input: The LLM input
+            
+        Returns:
+            Chat response (same format as chat() method)
+        """
+        warnings.warn(
+            "chat_with_tools() is deprecated and will be removed in 2026. Use chat() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        
+        result = await self.chat(input)
+        
+        # For backward compatibility, some old code might expect string responses on error
+        if isinstance(result.get("llm_response"), str) and "error occurred" in result.get("llm_response", "").lower():
+            return result["llm_response"]
+            
+        return result
+
+    async def stream_with_tools(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        DEPRECATED: Use stream() instead.
+        
+        Process a streaming chat message with tools. Maintained for backward compatibility.
+        
+        Args:
+            input: The LLM input
+            
+        Yields:
+            Stream response (same format as stream() method)
+        """
+        warnings.warn(
+            "stream_with_tools() is deprecated and will be removed in 2026. Use stream() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        
+        async for chunk in self.stream(input):
+            yield chunk
+
+    async def chat_completion(self, input: ILLMInput) -> Union[Dict[str, Any], str]:
+        """
+        DEPRECATED: Use chat() instead.
+        
+        Chat completion method. Maintained for backward compatibility.
+        
+        Args:
+            input: The LLM input
+            
+        Returns:
+            Chat response (same format as chat() method)
+        """
+        warnings.warn(
+            "chat_completion() is deprecated and will be removed in 2026. Use chat() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        
+        result = await self.chat(input)
+        
+        # For backward compatibility, some old code might expect string responses on error
+        if isinstance(result.get("llm_response"), str) and "error occurred" in result.get("llm_response", "").lower():
+            return result["llm_response"]
+            
+        return result
+
+    async def stream_completion(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        DEPRECATED: Use stream() instead.
+        
+        Streaming completion method. Maintained for backward compatibility.
+        
+        Args:
+            input: The LLM input
+            
+        Yields:
+            Stream response (same format as stream() method)
+        """
+        warnings.warn(
+            "stream_completion() is deprecated and will be removed in 2026. Use stream() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        
+        async for chunk in self.stream(input):
+            yield chunk
+
+    # ========================================================================
+    # UTILITY METHODS - Available to all providers
+    # ========================================================================
+
     def _log_provider_info(self, message: str):
         """Log provider-specific information."""
-        self.logger.info(f"[{self.__class__.__name__}] {message}")
+        self.logger.info(f"[{self._get_provider_name()}] {message}")
 
     def _log_provider_debug(self, message: str):
         """Log provider-specific debug information."""
-        self.logger.debug(f"[{self.__class__.__name__}] {message}")
+        self.logger.debug(f"[{self._get_provider_name()}] {message}")
 
     def _log_provider_error(self, message: str):
         """Log provider-specific error information."""
-        self.logger.error(f"[{self.__class__.__name__}] {message}")
+        self.logger.error(f"[{self._get_provider_name()}] {message}")
 
-    def _get_provider_name(self) -> str:
-        """Get the provider name for logging and identification."""
-        return self.__class__.__name__.replace("Client", "").lower()
+    def get_active_background_tasks_count(self) -> int:
+        """
+        Get the number of currently active background tasks.
+        
+        Returns:
+            Number of active background tasks
+        """
+        return self._function_orchestrator.get_active_background_tasks_count()
+
+    async def wait_for_background_tasks(self, timeout: float = None) -> None:
+        """
+        Wait for all background tasks to complete (useful for testing).
+        
+        Args:
+            timeout: Maximum time to wait in seconds
+        """
+        await self._function_orchestrator.wait_for_background_tasks(timeout)

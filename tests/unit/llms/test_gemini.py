@@ -323,6 +323,7 @@ class TestGeminiClient:
         
         # Test Chat Method
         chat_response = await client.chat(input_data)
+        logger.debug(f"llm response: {chat_response}")
         assert isinstance(chat_response, dict)
         assert "llm_response" in chat_response
         chat_text = chat_response["llm_response"]
