@@ -1,74 +1,51 @@
 """
-OpenRouter implementation of the LLM interface using openai SDK.
-Supports both standard function calling and background tasks with manual tool orchestration.
-Follows the same interface pattern as the Azure and OpenAI clients for consistency.
+OpenRouter implementation using the new BaseLLMClient framework.
+
+Migrated to use structured function orchestration, dual interface support,
+and standardized patterns from the Arshai framework.
 """
 
 import os
-import logging
 import json
-import traceback
 import time
 import inspect
-from typing import Dict, Any, TypeVar, Type, Union, AsyncGenerator, List, Tuple
+from typing import Dict, Any, TypeVar, Type, Union, AsyncGenerator, List
 from openai import OpenAI
+
 from arshai.core.interfaces.illm import ILLMConfig, ILLMInput
 from arshai.llms.base_llm_client import BaseLLMClient
 from arshai.llms.utils import (
     is_json_complete,
-    standardize_usage_metadata,
-    accumulate_usage_safely,
     parse_to_structure,
-    build_enhanced_instructions,
 )
+from arshai.llms.utils.function_execution import FunctionCall, FunctionExecutionInput
 
 T = TypeVar("T")
 
-class OpenRouterClient(BaseLLMClient):
-    """OpenRouter implementation of the LLM interface"""
-    
-    # Constants for structured output instructions
-    STRUCTURE_INSTRUCTIONS_TEMPLATE = """
+# Structure instructions template used across methods
+STRUCTURE_INSTRUCTIONS_TEMPLATE = """
 
 You MUST ALWAYS use the {function_name} tool/function to format your response.
 Your response ALWAYS MUST be returned using the tool, independently of what the message or response are.
 You MUST ALWAYS CALL TOOLS FOR RETURNING RESPONSE
 The response Must be in JSON format"""
+
+
+class OpenRouterClient(BaseLLMClient):
+    """
+    OpenRouter implementation using the new framework architecture.
     
-    # Constants for background task descriptions
-    BACKGROUND_TASK_PREFIX = "BACKGROUND TASK: "
-    BACKGROUND_TASK_SUFFIX = ". This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
-    
-    # Constants for error messages
-    class ErrorMessages:
-        STRUCTURE_FUNCTION_NOT_CALLED = "Expected structure function call for {structure_type} but none received"
-        STRUCTURE_RESPONSE_FAILED = "Failed to generate structured response of type {structure_type}"
-        STRUCTURE_RESPONSE_ERROR = "Error creating structured response from {function_name}: {error}"
-        MAX_TURNS_REACHED = "Maximum number of function calling turns reached"
-        FUNCTION_NOT_FOUND = "Function {function_name} not found in available functions or background tasks"
-    
-    def __init__(self, config: ILLMConfig):
-        """
-        Initialize the OpenRouter client.
-        
-        Args:
-            config: Configuration for the LLM
-        """
-        # Initialize base client (handles common setup)
-        super().__init__(config)
+    This client demonstrates how to implement a provider using the new
+    BaseLLMClient framework with minimal code duplication.
+    """
     
     def _initialize_client(self) -> Any:
         """
         Initialize the OpenRouter client with safe HTTP configuration.
         
-        OpenRouter uses an OpenAI-compatible API with custom base URL and headers.
-        Uses SafeHttpClientFactory to create a client with high connection limits and proper
-        timeouts to prevent httpcore deadlock issues. Falls back gracefully if advanced
-        configuration is not available.
-        
         Returns:
-            OpenAI client instance configured for OpenRouter with safe HTTP configuration
-        
+            OpenAI client instance configured for OpenRouter
+            
         Raises:
             ValueError: If OPENROUTER_API_KEY is not set in environment variables
         """
@@ -85,7 +62,7 @@ The response Must be in JSON format"""
         app_name = os.environ.get("OPENROUTER_APP_NAME", "arshai")
         
         try:
-            # Import the safe factory
+            # Import the safe factory for better HTTP handling
             from arshai.clients.utils.safe_http_client import SafeHttpClientFactory
             
             self.logger.info("Creating OpenRouter client with safe HTTP configuration")
@@ -129,7 +106,9 @@ The response Must be in JSON format"""
                 default_headers={
                     "HTTP-Referer": site_url,
                     "X-Title": app_name,
-                }
+                },
+                timeout=30.0,
+                max_retries=2
             )
         
         except Exception as e:
@@ -159,19 +138,90 @@ The response Must be in JSON format"""
                         "X-Title": app_name,
                     }
                 )
-    
-    def _python_function_to_openai_tool(self, func, name: str, function_type: str = "tool") -> Dict[str, Any]:
+
+    # ========================================================================
+    # PROVIDER-SPECIFIC HELPER METHODS
+    # ========================================================================
+
+    def _accumulate_usage_safely(self, current_usage: Dict[str, Any], accumulated_usage: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Convert a Python function to OpenAI tool format using function inspection.
+        Safely accumulate usage metadata without in-place mutations.
         
         Args:
-            func: Python callable function
-            name: Function name
-            function_type: "tool" for regular tools, "background_task" for background tasks
-            
+            current_usage: Current usage metadata
+            accumulated_usage: Previously accumulated usage (optional)
+        
         Returns:
-            Dictionary in OpenAI tool format
+            New accumulated usage dictionary
         """
+        if accumulated_usage is None:
+            return current_usage
+        
+        return {
+            "input_tokens": accumulated_usage["input_tokens"] + current_usage["input_tokens"],
+            "output_tokens": accumulated_usage["output_tokens"] + current_usage["output_tokens"],
+            "total_tokens": accumulated_usage["total_tokens"] + current_usage["total_tokens"],
+            "thinking_tokens": accumulated_usage["thinking_tokens"] + current_usage["thinking_tokens"],
+            "tool_calling_tokens": accumulated_usage["tool_calling_tokens"] + current_usage["tool_calling_tokens"],
+            "provider": current_usage["provider"],
+            "model": current_usage["model"],
+            "request_id": current_usage["request_id"]
+        }
+
+    def _create_openai_messages(self, input: ILLMInput) -> List[Dict[str, Any]]:
+        """Create OpenAI-compatible messages from input."""
+        return [
+            {"role": "system", "content": input.system_prompt},
+            {"role": "user", "content": input.user_message}
+        ]
+
+    def _convert_functions_to_openai_format(self, functions: Union[List[Dict], Dict[str, Any]], is_background: bool = False) -> List[Dict]:
+        """
+        Unified method to convert functions to OpenAI format.
+        
+        Args:
+            functions: Either list of tool schemas or dict of callable functions
+            is_background: Whether these are background tasks
+        
+        Returns:
+            List of OpenAI-formatted function definitions
+        """
+        openai_functions = []
+        
+        if isinstance(functions, list):
+            # Handle pre-defined tool schemas
+            for tool in functions:
+                # Ensure additionalProperties is False for strict mode
+                parameters = tool.get("parameters", {})
+                if isinstance(parameters, dict) and "additionalProperties" not in parameters:
+                    parameters["additionalProperties"] = False
+
+                openai_functions.append({
+                    "type": "function",
+                    "function": {
+                        "name": tool.get("name"),
+                        "description": tool.get("description", ""),
+                        "parameters": parameters
+                    }
+                })
+        
+        elif isinstance(functions, dict):
+            # Handle callable Python functions
+            for name, func in functions.items():
+                try:
+                    function_def = self._python_function_to_openai_function(func, name, is_background=is_background)
+                    openai_functions.append({
+                        "type": "function",
+                        "function": function_def
+                    })
+                except Exception as e:
+                    self.logger.warning(f"Failed to convert {'background task' if is_background else 'function'} {name}: {str(e)}")
+                    continue
+        
+        return openai_functions
+
+    def _python_function_to_openai_function(self, func, name: str, is_background: bool = False) -> Dict[str, Any]:
+        """Convert a Python function to OpenAI function format using introspection - matches old implementation."""
         try:
             # Get function signature
             sig = inspect.signature(func)
@@ -181,8 +231,8 @@ The response Must be in JSON format"""
             description = description.strip()
             
             # Enhance description for background tasks
-            if function_type == "background_task":
-                description = f"{self.BACKGROUND_TASK_PREFIX}{description}{self.BACKGROUND_TASK_SUFFIX}"
+            if is_background:
+                description = f"BACKGROUND TASK: {description}. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
             
             # Build parameters schema
             properties = {}
@@ -227,8 +277,8 @@ The response Must be in JSON format"""
             self.logger.warning(f"Failed to inspect function {name}: {str(e)}")
             # Return basic fallback schema
             description = f"Execute {name} function"
-            if function_type == "background_task":
-                description = f"{self.BACKGROUND_TASK_PREFIX}{description}{self.BACKGROUND_TASK_SUFFIX}"
+            if is_background:
+                description = f"BACKGROUND TASK: {description}. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
             
             return {
                 "name": name,
@@ -240,18 +290,9 @@ The response Must be in JSON format"""
                     "additionalProperties": False
                 }
             }
-    
+
     def _python_type_to_json_schema_type(self, python_type) -> str:
-        """
-        Convert Python type annotations to JSON schema types.
-        
-        Args:
-            python_type: Python type annotation
-            
-        Returns:
-            JSON schema type string
-        """
-        # Handle common types
+        """Convert Python type annotations to JSON schema types."""
         if python_type == str:
             return "string"
         elif python_type == int:
@@ -265,80 +306,10 @@ The response Must be in JSON format"""
         elif python_type == dict or (hasattr(python_type, '__origin__') and python_type.__origin__ == dict):
             return "object"
         else:
-            # Default to string for unknown types
-            return "string"
-    
-    def _convert_functions_to_llm_format(
-        self, 
-        functions: Union[List[Dict], Dict[str, Any]], 
-        function_type: str = "tool"
-    ) -> List[Dict]:
-        """
-        Convert functions to OpenAI tool format.
-        
-        Args:
-            functions: Either List of JSON schema tool dictionaries or Dict of callable functions
-            function_type: "tool" for regular tools, "background_task" for background tasks
-            
-        Returns:
-            List of function definition dictionaries in OpenAI format
-        """
-        openrouter_functions = []
-        
-        # Handle JSON schema tool dictionaries (from tools_list)
-        if isinstance(functions, list):
-            for tool in functions:
-                # Get tool properties
-                description = tool.get("description", "")
-                
-                # Enhance description for background tasks
-                if function_type == "background_task":
-                    description = f"{self.BACKGROUND_TASK_PREFIX}{description}{self.BACKGROUND_TASK_SUFFIX}"
-                
-                # Ensure additionalProperties is False for strict mode
-                parameters = tool.get("parameters", {})
-                if isinstance(parameters, dict) and "additionalProperties" not in parameters:
-                    parameters["additionalProperties"] = False
+            return "string"  # Default to string for unknown types
 
-                # Create standardized tool format for OpenRouter
-                openrouter_functions.append({
-                    "type": "function",
-                    "function": {
-                        "name": tool.get("name"),
-                        "description": description,
-                        "parameters": parameters
-                    }
-                })
-                
-        # Handle callable Python functions (from background_tasks or callable_functions)
-        elif isinstance(functions, dict):
-            for name, callable_func in functions.items():
-                try:
-                    # Use function inspection helper
-                    function_tool = self._python_function_to_openai_tool(callable_func, name, function_type)
-                    # Wrap in OpenRouter format
-                    openrouter_functions.append({
-                        "type": "function",
-                        "function": function_tool
-                    })
-                    
-                except Exception as e:
-                    self.logger.warning(f"Failed to convert function {name}: {str(e)}")
-                    continue
-        
-        return openrouter_functions
-    
-    def _create_structure_function(self, structure_type: Type[T]) -> Dict[str, Any]:
-        """
-        Create a function definition from the structure type for OpenRouter.
-        This follows the same pattern as openrouter_old.py but in the new architecture.
-        
-        Args:
-            structure_type: The Pydantic model or TypedDict class to convert
-            
-        Returns:
-            Function definition dictionary in OpenRouter format
-        """
+    def _create_structure_function_openai(self, structure_type: Type[T]) -> Dict[str, Any]:
+        """Create OpenAI function definition for structured output."""
         function_name = structure_type.__name__.lower()
         description = structure_type.__doc__ or f"Create a {structure_type.__name__} response"
         
@@ -379,99 +350,35 @@ The response Must be in JSON format"""
                 "parameters": schema
             }
         }
-    
-    def _prepare_tools_context(self, input: ILLMInput) -> Tuple[List, str]:
-        """
-        Prepare OpenRouter-specific tools and enhanced context instructions.
-        
-        Args:
-            input: The LLM input
-            
-        Returns:
-            Tuple of (openrouter_tools_list, enhanced_context_instructions)
-        """
-        # Convert tools to OpenRouter format using unified method
-        openrouter_tools = []
-        
-        # Add structure function if structure_type is provided (but don't count as regular function)
-        if input.structure_type:
-            structure_function = self._create_structure_function(input.structure_type)
-            openrouter_tools.append(structure_function)
-        
-        if input.tools_list and len(input.tools_list) > 0:
-            openrouter_tools.extend(
-                self._convert_functions_to_llm_format(input.tools_list, function_type="tool")
-            )
-        
-        if input.background_tasks and len(input.background_tasks) > 0:
-            openrouter_tools.extend(
-                self._convert_functions_to_llm_format(input.background_tasks, function_type="background_task")
-            )
-        
-        # Build enhanced instructions using generic utility
-        enhanced_instructions = build_enhanced_instructions(
-            structure_type=input.structure_type,
-            background_tasks=input.background_tasks
-        )
-        
-        # Add structure function instructions if needed
-        if input.structure_type:
-            function_name = input.structure_type.__name__.lower()
-            enhanced_instructions += f"""\n\nYou MUST ALWAYS use the {function_name} tool/function to format your response.
-Your response ALWAYS MUST be returned using the tool, independently of what the message or response are.
-You MUST ALWAYS CALL TOOLS FOR RETURNING RESPONSE
-The response Must be in JSON format"""
-        
-        return openrouter_tools, enhanced_instructions
-    
-    def _prepare_structure_context(self, input: ILLMInput, kwargs: Dict[str, Any], messages: List[Dict]) -> None:
-        """
-        Prepare structure function and enhance messages for structured output.
-        
-        Args:
-            input: The LLM input containing structure_type
-            kwargs: Dictionary to add tools to
-            messages: List of messages to enhance with structure instructions
-        """
-        if input.structure_type:
-            structure_function = self._create_structure_function(input.structure_type)
-            kwargs["tools"] = [structure_function]
-            
-            # Add structure function instructions
-            function_name = input.structure_type.__name__.lower()
-            messages[0]["content"] += self.STRUCTURE_INSTRUCTIONS_TEMPLATE.format(function_name=function_name)
 
-    async def _process_function_calls(self, tool_calls, input: ILLMInput, messages: List[Dict]) -> Tuple[bool, Any]:
+    def _extract_function_calls_from_response(self, response) -> List:
+        """Extract function calls from OpenAI response."""
+        if hasattr(response, 'choices') and response.choices:
+            message = response.choices[0].message
+            if hasattr(message, 'tool_calls') and message.tool_calls:
+                return message.tool_calls
+        return []
+
+    def _process_function_calls_for_orchestrator(self, tool_calls, input: ILLMInput) -> tuple:
         """
-        Process function calls from LLM response and add results to messages.
-        Handles both regular tools, background tasks, and structure functions consistently.
+        Process function calls and prepare them for the orchestrator using object-based approach.
         
-        Args:
-            tool_calls: Tool calls from LLM response (OpenAI format)
-            input: The original LLM input
-            messages: List of OpenAI-style messages to append function results to
-            
+        CRITICAL FIX: Uses List[FunctionCall] to handle multiple calls to the same function.
+        This solves the infinite loop issue where dictionary-based approach was dropping duplicate function names.
+        
         Returns:
-            Tuple of (has_regular_functions, structured_response)
-            - has_regular_functions: True if regular tools were processed (continue conversation)
-            - structured_response: Parsed structure object if structure function was called, None otherwise
+            Tuple of (function_calls, structured_response)
         """
-        if not tool_calls:
-            return False, None
-            
-        # Create function call objects for orchestrator
-        class FunctionCall:
-            def __init__(self, name: str, args: dict):
-                self.name = name
-                self.args = args
-        
-        generic_function_calls = []
+        function_calls = []
         structured_response = None
-        has_regular_functions = False
         
-        for tool_call in tool_calls:
+        for i, tool_call in enumerate(tool_calls):
             function_name = tool_call.function.name
-            function_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+            try:
+                function_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+            except json.JSONDecodeError:
+                self.logger.warning(f"Failed to parse function arguments for {function_name}")
+                function_args = {}
             
             # Check if it's the structure function
             if input.structure_type and function_name == input.structure_type.__name__.lower():
@@ -480,88 +387,42 @@ The response Must be in JSON format"""
                     self.logger.info(f"Created structured response: {function_name}")
                     continue  # Don't process structure function as regular function
                 except Exception as e:
-                    self.logger.error(self.ErrorMessages.STRUCTURE_RESPONSE_ERROR.format(function_name=function_name, error=str(e)))
+                    self.logger.error(f"Error creating structured response from {function_name}: {str(e)}")
                     continue
             
-            # Track if we have regular functions (affects continuation logic)
-            if function_name in (input.callable_functions or {}):
-                has_regular_functions = True
-            elif function_name not in (input.background_tasks or {}):
-                self.logger.warning(self.ErrorMessages.FUNCTION_NOT_FOUND.format(function_name=function_name))
-                continue
-                
-            generic_function_calls.append(FunctionCall(name=function_name, args=function_args))
-        
-        # Execute regular functions and background tasks (but not structure functions)
-        if generic_function_calls:
-            # Execute all functions (regular + background) via orchestrator
-            execution_results = await self._function_orchestrator.process_function_calls_from_response(
-                generic_function_calls,
-                input.callable_functions or {},
-                input.background_tasks or {}
-            )
+            # Create unique call_id to track individual function calls
+            call_id = f"{function_name}_{i}"
             
-            # Add results to messages
-            self._add_function_results_to_messages(execution_results, messages, tool_calls)
-            
-            self.logger.info(f"Processed {len(generic_function_calls)} function calls, regular tools: {has_regular_functions}")
+            # Check if it's a background task
+            if function_name in (input.background_tasks or {}):
+                function_calls.append(FunctionCall(
+                    name=function_name,
+                    args=function_args,
+                    call_id=call_id,
+                    is_background=True
+                ))
+            # Check if it's a regular function
+            elif function_name in (input.callable_functions or {}):
+                function_calls.append(FunctionCall(
+                    name=function_name,
+                    args=function_args,
+                    call_id=call_id,
+                    is_background=False
+                ))
+            else:
+                self.logger.warning(f"Function {function_name} not found in available functions or background tasks")
         
-        return has_regular_functions, structured_response
+        return function_calls, structured_response
 
-    def _add_function_results_to_messages(self, execution_results: Dict, messages: List[Dict], tool_calls) -> None:
-        """
-        Add function execution results to messages in OpenAI chat format.
-        
-        Args:
-            execution_results: Results from function orchestrator
-            messages: List of OpenAI-style messages to append to
-            tool_calls: Original tool calls with call_id info
-        """
-        # Add function results as tool messages
-        function_results = execution_results.get('function_results', [])
-        function_names = execution_results.get('function_names', [])
-        function_args = execution_results.get('function_args', [])
-        for (name, result, args) in zip(function_names, function_results, function_args):
-            messages.append({
-                "role": "function",
-                "name": name,
-                "content": f"Function '{name}' called with arguments {args} returned: {result}"
-            })
-    
-        # Add background task notifications as tool messages (if any)
-        for bg_message in execution_results.get('background_initiated', []):
-            messages.append({
-                "type": "message",
-                "role": "user",
-                "content": f"Background task initiated: {bg_message}"
-            })
-        
-        if function_results:
-            completion_msg = f"All {len(function_results)} function(s) completed. Please provide your response based on these results."
-            messages.append({
-                "type": "message",
-                "role": "user",
-                "content": completion_msg
-            })
+    # ========================================================================
+    # FRAMEWORK-REQUIRED ABSTRACT METHODS
+    # ========================================================================
 
     async def _chat_simple(self, input: ILLMInput) -> Dict[str, Any]:
-        """
-        Handle simple chat without tools or background tasks using chat.completions.
-        For structured output, we use function calling approach consistently.
+        """Handle simple chat without tools or background tasks."""
+        messages = self._create_openai_messages(input)
         
-        Args:
-            input: The LLM input
-            
-        Returns:
-            Dict containing the LLM response and usage information
-        """
-        # Build base context
-        messages = [
-            {"role": "system", "content": input.system_prompt},
-            {"role": "user", "content": input.user_message}
-        ]
-        
-        # Prepare arguments for chat.completions.create
+        # Prepare OpenAI request arguments
         kwargs = {
             "model": self.config.model,
             "messages": messages,
@@ -569,152 +430,183 @@ The response Must be in JSON format"""
             "max_tokens": self.config.max_tokens if self.config.max_tokens else None,
         }
         
-        # For structured output, use function calling approach (not JSON mode)
-        self._prepare_structure_context(input, kwargs, messages)
-                
+        # Add structure function if needed
+        if input.structure_type:
+            structure_function = self._create_structure_function_openai(input.structure_type)
+            kwargs["tools"] = [structure_function]
+            
+            # Add structure instructions to system prompt
+            function_name = input.structure_type.__name__.lower()
+            kwargs["messages"][0]["content"] += STRUCTURE_INSTRUCTIONS_TEMPLATE.format(function_name=function_name)
+        
+        # Make the API call
         response = self._client.chat.completions.create(**kwargs)
         
         # Process usage metadata
-        usage = None
-        if hasattr(response, "usage") and response.usage:
-            usage = standardize_usage_metadata(response.usage, provider="openrouter")
-
-        message = response.choices[0].message
+        usage = self._standardize_usage_metadata(
+            response.usage if hasattr(response, 'usage') else None,
+            self._get_provider_name(),
+            self.config.model,
+            getattr(response, 'id', None)
+        )
         
-        # Handle response based on whether it's structured or not
+        # Handle structured output
         if input.structure_type:
-            # Check for structure function call
-            if message.tool_calls:
-                for tool_call in message.tool_calls:
-                    function_name = tool_call.function.name
-                    if function_name == input.structure_type.__name__.lower():
-                        try:
-                            function_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
-                            structured_response = input.structure_type(**function_args)
-                            self.logger.info(f"Created structured response via function call: {function_name}")
-                            return {"llm_response": structured_response, "usage": usage}
-                        except Exception as e:
-                            self.logger.error(self.ErrorMessages.STRUCTURE_RESPONSE_ERROR.format(function_name=function_name, error=str(e)))
-                            return {"llm_response": self.ErrorMessages.STRUCTURE_RESPONSE_FAILED.format(structure_type=input.structure_type.__name__), "usage": usage}
+            tool_calls = self._extract_function_calls_from_response(response)
+            if tool_calls:
+                _, structured_response = self._process_function_calls_for_orchestrator(tool_calls, input)
+                if structured_response is not None:
+                    return {"llm_response": structured_response, "usage": usage}
             
-            # Fallback: no function call received for structured output
-            self.logger.warning(self.ErrorMessages.STRUCTURE_FUNCTION_NOT_CALLED.format(structure_type=input.structure_type.__name__))
-            return {"llm_response": self.ErrorMessages.STRUCTURE_RESPONSE_FAILED.format(structure_type=input.structure_type.__name__), "usage": usage}
-        else:
-            # For unstructured output, use the message content
-            return {"llm_response": message.content, "usage": usage}
+            # Fallback for failed structured output
+            return {"llm_response": f"Failed to generate structured response of type {input.structure_type.__name__}", "usage": usage}
+        
+        # Handle regular text response
+        message = response.choices[0].message
+        return {"llm_response": message.content, "usage": usage}
 
-    async def _chat_with_tools(self, input: ILLMInput) -> Dict[str, Any]:
-        """
-        Handle complex chat with tools and/or background tasks using chat.completions.
+    async def _chat_with_functions(self, input: ILLMInput) -> Dict[str, Any]:
+        """Handle complex chat with tools and/or background tasks."""
+        messages = self._create_openai_messages(input)
         
-        Args:
-            input: The LLM input
+        # Prepare tools for OpenAI
+        openai_tools = []
+        
+        # Add structure function if needed
+        if input.structure_type:
+            structure_function = self._create_structure_function_openai(input.structure_type)
+            openai_tools.append(structure_function)
             
-        Returns:
-            Dict containing the LLM response and usage information
-        """
-        # Build base context and prepare tools
-        messages = [
-            {"role": "system", "content": input.system_prompt},
-            {"role": "user", "content": input.user_message}
-        ]
-        openrouter_tools, enhanced_instructions = self._prepare_tools_context(input)
-        messages[0]["content"] += enhanced_instructions
+            # Add structure instructions
+            function_name = input.structure_type.__name__.lower()
+            messages[0]["content"] += STRUCTURE_INSTRUCTIONS_TEMPLATE.format(function_name=function_name)
         
-        # Handle complex cases with function calling (multi-turn)
+        # Add regular tools
+        if input.tools_list:
+            openai_tools.extend(self._convert_functions_to_openai_format(input.tools_list, is_background=False))
+        
+        # Add background tasks
+        if input.background_tasks:
+            openai_tools.extend(self._convert_functions_to_openai_format(input.background_tasks, is_background=True))
+        
+        # Multi-turn conversation for function calling
         current_turn = 0
         accumulated_usage = None
         
         while current_turn < input.max_turns:
-            self.logger.info(f"Current turn: {current_turn}")
-            has_regular_functions = False
+            self.logger.info(f"Function calling turn: {current_turn}")
+            
             try:
                 start_time = time.time()
                 
-                # Prepare arguments for chat.completions.create
+                # Prepare arguments for OpenAI
                 kwargs = {
                     "model": self.config.model,
                     "messages": messages,
                     "temperature": self.config.temperature,
                     "max_tokens": self.config.max_tokens if self.config.max_tokens else None,
-                    "tools": openrouter_tools if openrouter_tools else None,
+                    "tools": openai_tools if openai_tools else None,
                 }
                 
-                # Note: For structured output, we use function calling instead of response_format
-                # The structure function is added to tools in _prepare_tools_context
-
                 response = self._client.chat.completions.create(**kwargs)
-                self.logger.info(f"🔍response time: {time.time() - start_time}")
+                self.logger.info(f"Response time: {time.time() - start_time:.2f}s")
                 
-                # Process usage metadata safely
+                # Process usage metadata using framework standardization
                 if hasattr(response, "usage") and response.usage:
-                    current_usage = standardize_usage_metadata(response.usage, provider="openrouter")
-                    accumulated_usage = accumulate_usage_safely(current_usage, accumulated_usage)
-
+                    current_usage = self._standardize_usage_metadata(
+                        response.usage, self._get_provider_name(), self.config.model, getattr(response, 'id', None)
+                    )
+                    # Use safe accumulation helper
+                    accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
+                
                 message = response.choices[0].message
                 
                 # Check for function calls
-                if message.tool_calls:
-                    self.logger.info(f"Turn {current_turn}: Found {len(message.tool_calls)} function calls")
+                tool_calls = self._extract_function_calls_from_response(response)
+                if tool_calls:
+                    self.logger.info(f"Turn {current_turn}: Found {len(tool_calls)} function calls")
                     
-                    # Process function calls using unified method
-                    has_regular_functions, structured_response = await self._process_function_calls(message.tool_calls, input, messages)
+                    # Process function calls for orchestrator
+                    function_calls, structured_response = self._process_function_calls_for_orchestrator(tool_calls, input)
                     
                     # If we got a structured response, return it immediately
                     if structured_response is not None:
                         self.logger.info(f"Turn {current_turn}: Received structured response via function call")
                         return {"llm_response": structured_response, "usage": accumulated_usage}
                     
-                    if has_regular_functions:
-                        current_turn += 1
-                        continue
+                    # Execute functions via orchestrator using new object-based approach
+                    if function_calls:
+                        # Create execution input
+                        execution_input = FunctionExecutionInput(
+                            function_calls=function_calls,
+                            available_functions=input.callable_functions or {},
+                            available_background_tasks=input.background_tasks or {}
+                        )
+                        
+                        execution_result = await self._execute_functions_with_orchestrator(execution_input)
+                        
+                        # Add function results to conversation
+                        self._add_function_results_to_messages(execution_result, messages)
+                        
+                        # Continue if we have regular functions (need to continue conversation)
+                        regular_function_calls = [call for call in function_calls if not call.is_background]
+                        if regular_function_calls:
+                            current_turn += 1
+                            continue
                 
-                # For structured output, we should have received a function call
-                # If no function call was received but structure_type is expected, that's an error
+                # Handle structured output expectation
                 if input.structure_type:
-                    self.logger.warning(f"Turn {current_turn}: {self.ErrorMessages.STRUCTURE_FUNCTION_NOT_CALLED.format(structure_type=input.structure_type.__name__)}")
-                    return {"llm_response": self.ErrorMessages.STRUCTURE_RESPONSE_FAILED.format(structure_type=input.structure_type.__name__), "usage": accumulated_usage}
+                    self.logger.warning(f"Turn {current_turn}: Expected structure function call but none received")
+                    return {"llm_response": f"Failed to generate structured response of type {input.structure_type.__name__}", "usage": accumulated_usage}
                 
-                # Return text response (only for non-structured output)
+                # Return text response
                 if message.content:
                     self.logger.info(f"Turn {current_turn}: Received text response")
                     return {"llm_response": message.content, "usage": accumulated_usage}
-
+                
             except Exception as e:
-                self.logger.error(
-                    f"Error in OpenRouter chat_with_tools turn {current_turn}: {str(e)}"
-                )
-                self.logger.error(traceback.format_exc())
+                self.logger.error(f"Error in OpenRouter chat_with_functions turn {current_turn}: {str(e)}")
                 return {
                     "llm_response": f"An error occurred: {str(e)}",
                     "usage": accumulated_usage,
                 }
-
+        
         # Handle max turns reached
         return {
-            "llm_response": self.ErrorMessages.MAX_TURNS_REACHED,
+            "llm_response": "Maximum number of function calling turns reached",
             "usage": accumulated_usage,
         }
-    
+
+    def _add_function_results_to_messages(self, execution_result: Dict, messages: List[Dict]) -> None:
+        """Add function execution results to messages in OpenAI chat format."""
+        # Add function results as function messages
+        for result in execution_result.get('regular_results', []):
+            messages.append({
+                "role": "function",
+                "name": result['name'],
+                "content": f"Function '{result['name']}' called with arguments {result['args']} returned: {result['result']}"
+            })
+        
+        # Add background task notifications
+        for bg_message in execution_result.get('background_initiated', []):
+            messages.append({
+                "role": "user",
+                "content": f"Background task initiated: {bg_message}"
+            })
+        
+        # Add completion message if we have results
+        if execution_result.get('regular_results'):
+            completion_msg = f"All {len(execution_result['regular_results'])} function(s) completed. Please provide your response based on these results."
+            messages.append({
+                "role": "user",
+                "content": completion_msg
+            })
+
     async def _stream_simple(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
-        """
-        Handle simple streaming without tools or background tasks using chat.completions.
-        For structured output, we use function calling approach consistently.
+        """Handle simple streaming without tools or background tasks."""
+        messages = self._create_openai_messages(input)
         
-        Args:
-            input: The LLM input
-            
-        Yields:
-            Dict containing streaming response chunks and usage information
-        """
-        # Build base context
-        messages = [
-            {"role": "system", "content": input.system_prompt},
-            {"role": "user", "content": input.user_message}
-        ]
-        
-        # Prepare arguments for chat.completions.create
+        # Prepare OpenAI request arguments
         kwargs = {
             "model": self.config.model,
             "messages": messages,
@@ -723,8 +615,14 @@ The response Must be in JSON format"""
             "stream": True,
         }
         
-        # For structured output, use function calling approach (not JSON mode)
-        self._prepare_structure_context(input, kwargs, messages)
+        # Add structure function if needed
+        if input.structure_type:
+            structure_function = self._create_structure_function_openai(input.structure_type)
+            kwargs["tools"] = [structure_function]
+            
+            # Add structure instructions
+            function_name = input.structure_type.__name__.lower()
+            kwargs["messages"][0]["content"] += STRUCTURE_INSTRUCTIONS_TEMPLATE.format(function_name=function_name)
         
         # Track usage and collected data
         accumulated_usage = None
@@ -735,8 +633,10 @@ The response Must be in JSON format"""
         for chunk in self._client.chat.completions.create(**kwargs):
             # Handle usage data if available
             if hasattr(chunk, 'usage') and chunk.usage is not None:
-                current_usage = standardize_usage_metadata(chunk.usage, provider="openrouter")
-                accumulated_usage = accumulate_usage_safely(current_usage, accumulated_usage)
+                current_usage = self._standardize_usage_metadata(
+                    chunk.usage, self._get_provider_name(), self.config.model
+                )
+                accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
             
             # Skip chunks without choices
             if not chunk.choices:
@@ -787,63 +687,71 @@ The response Must be in JSON format"""
         # Final yield with usage information
         yield {"llm_response": None, "usage": accumulated_usage}
 
-    async def _stream_with_tools(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
-        """
-        Handle complex streaming with tools and/or background tasks using chat.completions.
+    async def _stream_with_functions(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
+        """Handle complex streaming with tools and/or background tasks - full streaming implementation."""
+        messages = self._create_openai_messages(input)
         
-        Args:
-            input: The LLM input
+        # Prepare tools for OpenAI
+        openai_tools = []
+        
+        # Add structure function if needed
+        if input.structure_type:
+            structure_function = self._create_structure_function_openai(input.structure_type)
+            openai_tools.append(structure_function)
             
-        Yields:
-            Dict containing streaming response chunks and usage information
-        """
-        # Build base context and prepare tools
-        messages = [
-            {"role": "system", "content": input.system_prompt},
-            {"role": "user", "content": input.user_message}
-        ]
-        openrouter_tools, enhanced_instructions = self._prepare_tools_context(input)
-        messages[0]["content"] += enhanced_instructions
+            # Add structure instructions
+            function_name = input.structure_type.__name__.lower()
+            messages[0]["content"] += STRUCTURE_INSTRUCTIONS_TEMPLATE.format(function_name=function_name)
         
-        # Handle complex cases with function calling (multi-turn)
+        # Add regular tools
+        if input.tools_list:
+            openai_tools.extend(self._convert_functions_to_openai_format(input.tools_list, is_background=False))
+        
+        # Add background tasks
+        if input.background_tasks:
+            openai_tools.extend(self._convert_functions_to_openai_format(input.background_tasks, is_background=True))
+        
+        # Multi-turn streaming conversation for function calling  
         current_turn = 0
         accumulated_usage = None
-
+        
         while current_turn < input.max_turns:
-            self.logger.info(f"Current turn: {current_turn}")
+            self.logger.info(f"Stream function calling turn: {current_turn}")
             has_regular_functions = False
             try:
-                # Prepare arguments for chat.completions.create
+                # Prepare arguments for streaming
                 kwargs = {
                     "model": self.config.model,
                     "messages": messages,
                     "temperature": self.config.temperature,
                     "max_tokens": self.config.max_tokens if self.config.max_tokens else None,
-                    "tools": openrouter_tools if openrouter_tools else None,
+                    "tools": openai_tools if openai_tools else None,
                     "stream": True,
                 }
                 
-                # Store collected message and tool calls
+                # Store collected message and tool calls (matching old implementation exactly)
                 collected_message = {"content": "", "tool_calls": []}
                 collected_text = ""
                 chunk_count = 0
-
+                
                 self.logger.debug(f"Starting stream processing for turn {current_turn}")
-
-                # Process streaming response
+                
+                # Process streaming response (matching old implementation)
                 for chunk in self._client.chat.completions.create(**kwargs):
                     chunk_count += 1
                     # Handle usage metadata
                     if hasattr(chunk, 'usage') and chunk.usage is not None:
-                        current_usage = standardize_usage_metadata(chunk.usage, provider="openrouter")
-                        accumulated_usage = accumulate_usage_safely(current_usage, accumulated_usage)
+                        current_usage = self._standardize_usage_metadata(
+                            chunk.usage, self._get_provider_name(), self.config.model
+                        )
+                        accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
                     
                     # Skip chunks without choices
                     if not chunk.choices:
                         continue
                     
                     delta = chunk.choices[0].delta
-
+                    
                     # Handle content streaming
                     if hasattr(delta, 'content') and delta.content is not None:
                         collected_message["content"] += delta.content
@@ -851,11 +759,11 @@ The response Must be in JSON format"""
                         # For structured output, we only yield content via function calls, not direct content
                         if not input.structure_type:
                             yield {"llm_response": collected_text}
-
-                    # Handle tool calls streaming
+                    
+                    # Handle tool calls streaming (EXACT match to old implementation)
                     if hasattr(delta, 'tool_calls') and delta.tool_calls:
                         for tool_delta in delta.tool_calls:
-                            # Use the index from the tool_delta, not enumerate
+                            # Use the index from the tool_delta, not enumerate (critical for OpenRouter)
                             tool_index = tool_delta.index
                             
                             # Ensure we have enough slots in the array
@@ -877,12 +785,12 @@ The response Must be in JSON format"""
                                     
                                 if tool_delta.function.arguments:
                                     current_tool_call["function"]["arguments"] += tool_delta.function.arguments
-
+                
                 self.logger.debug(f"Turn {current_turn}: Stream ended. Processed {chunk_count} chunks. Tool calls: {len(collected_message['tool_calls'])}, Text collected: {len(collected_text)} chars")
-
-                # Process function calls if any were collected (similar to _chat_with_tools)
+                
+                # Process function calls if any were collected (matching old implementation)
                 if collected_message["tool_calls"]:
-                    # Create mock tool calls for processing
+                    # Create mock tool calls for processing (exact match to old implementation)
                     class MockToolCall:
                         def __init__(self, tc_dict):
                             self.id = tc_dict["id"]
@@ -892,38 +800,56 @@ The response Must be in JSON format"""
                             })()
                     
                     mock_tool_calls = [MockToolCall(tc) for tc in collected_message["tool_calls"] if tc["function"]["name"]]
-                    self.logger.info(f"tool to call {mock_tool_calls}")
-                    has_regular_functions, structured_response = await self._process_function_calls(mock_tool_calls, input, messages)
+                    self.logger.info(f"Functions to call: {len(mock_tool_calls)}")
+                    
+                    # Process function calls for orchestrator
+                    function_calls, structured_response = self._process_function_calls_for_orchestrator(mock_tool_calls, input)
                     
                     # If we got a structured response, yield it and break
                     if structured_response is not None:
                         yield {"llm_response": structured_response, "usage": accumulated_usage}
                         break
                     
-                    if has_regular_functions:
-                        current_turn += 1
-                        continue
+                    # Execute functions via orchestrator using new object-based approach
+                    if function_calls:
+                        # Create execution input
+                        execution_input = FunctionExecutionInput(
+                            function_calls=function_calls,
+                            available_functions=input.callable_functions or {},
+                            available_background_tasks=input.background_tasks or {}
+                        )
+                        
+                        execution_result = await self._execute_functions_with_orchestrator(execution_input)
+                        
+                        # Add function results to conversation
+                        self._add_function_results_to_messages(execution_result, messages)
+                        
+                        # Continue if we have regular functions
+                        regular_function_calls = [call for call in function_calls if not call.is_background]
+                        if regular_function_calls:
+                            has_regular_functions = True
+                            current_turn += 1
+                            continue
                 
-                # Stream completed
+                # Stream completed for this turn
                 self.logger.debug(f"Turn {current_turn}: Stream completed")
                 break
-
+                
             except Exception as e:
-                self.logger.error(f"Error in OpenRouter stream_with_tools turn {current_turn}: {str(e)}")
-                self.logger.error(traceback.format_exc())
+                self.logger.error(f"Error in OpenRouter stream_with_functions turn {current_turn}: {str(e)}")
                 yield {
                     "llm_response": f"An error occurred: {str(e)}",
                     "usage": accumulated_usage,
                 }
                 return
-
+        
         # Handle max turns reached
         if current_turn >= input.max_turns:
             self.logger.warning(f"Maximum turns reached: {current_turn} >= {input.max_turns}")
             yield {
-                "llm_response": self.ErrorMessages.MAX_TURNS_REACHED,
+                "llm_response": "Maximum number of function calling turns reached",
                 "usage": accumulated_usage,
             }
         else:
-            # Final usage yield
+            # Final usage yield if no structured response was returned
             yield {"llm_response": None, "usage": accumulated_usage}

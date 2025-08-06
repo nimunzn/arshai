@@ -1,33 +1,44 @@
 """
-Azure OpenAI implementation of the LLM interface using openai SDK.
-Supports both standard function calling and background tasks with manual tool orchestration.
-Follows the same interface pattern as the Gemini client for consistency.
+Azure OpenAI implementation using the new BaseLLMClient framework.
+
+Migrated to use structured function orchestration, dual interface support,
+and standardized patterns from the Arshai framework.
 """
 
 import os
-import logging
 import json
-import traceback
 import time
 import inspect
-from typing import Dict, Any, TypeVar, Union, AsyncGenerator, List, Tuple
+from typing import Dict, Any, TypeVar, Type, Union, AsyncGenerator, List
 from openai import AzureOpenAI
 from openai.types.responses import ParsedResponse
+
 from arshai.core.interfaces.illm import ILLMConfig, ILLMInput
 from arshai.llms.base_llm_client import BaseLLMClient
 from arshai.llms.utils import (
     is_json_complete,
-    standardize_usage_metadata,
-    accumulate_usage_safely,
     parse_to_structure,
-    build_enhanced_instructions,
     convert_typeddict_to_basemodel,
 )
+from arshai.llms.utils.function_execution import FunctionCall, FunctionExecutionInput
 
 T = TypeVar("T")
 
+# Structure instructions template used across methods
+STRUCTURE_INSTRUCTIONS_TEMPLATE = """
+
+You MUST use structured output formatting as specified.
+Follow the required structure format exactly.
+The response must be properly formatted according to the schema."""
+
+
 class AzureClient(BaseLLMClient):
-    """Azure OpenAI implementation of the LLM interface"""
+    """
+    Azure OpenAI implementation using the new framework architecture.
+    
+    This client demonstrates how to implement a provider using the new
+    BaseLLMClient framework with Azure-specific optimizations.
+    """
     
     def __init__(self, config: ILLMConfig, azure_deployment: str = None, api_version: str = None):
         """
@@ -55,20 +66,19 @@ class AzureClient(BaseLLMClient):
         """
         Initialize the Azure OpenAI client with safe HTTP configuration.
         
-        Uses SafeHttpClientFactory to create a client with high connection limits and proper
-        timeouts to prevent httpcore deadlock issues. Falls back gracefully if advanced
-        configuration is not available.
-        
         Returns:
-            AzureOpenAI client instance with safe HTTP configuration
+            AzureOpenAI client instance configured with deployment and API version
+            
+        Raises:
+            ValueError: If required Azure configuration is missing
         """
         try:
-            # Import the safe factory
+            # Import the safe factory for better HTTP handling
             from arshai.clients.utils.safe_http_client import SafeHttpClientFactory
             
             self.logger.info("Creating Azure OpenAI client with safe HTTP configuration")
             
-            # Try to create safe httpx client first
+            # Create safe httpx client first
             import httpx
             httpx_version = getattr(httpx, '__version__', '0.0.0')
             
@@ -98,16 +108,20 @@ class AzureClient(BaseLLMClient):
                     self.logger.warning("AzureOpenAI does not support http_client or max_retries parameter in this version")
                     # Close the unused httpx client
                     safe_http_client.close()
-                    raise
+                    # Fallback to basic Azure client
+                    return AzureOpenAI(
+                        azure_deployment=self.azure_deployment,
+                        api_version=self.api_version
+                    )
                 else:
                     raise
-            
+                    
         except ImportError as e:
             self.logger.warning(f"Safe HTTP client factory not available: {e}, using default Azure client")
             # Fallback to original implementation
             return AzureOpenAI(
                 azure_deployment=self.azure_deployment,
-                api_version=self.api_version,
+                api_version=self.api_version
             )
         
         except Exception as e:
@@ -116,21 +130,101 @@ class AzureClient(BaseLLMClient):
             self.logger.info("Using fallback Azure OpenAI client configuration")
             return AzureOpenAI(
                 azure_deployment=self.azure_deployment,
-                api_version=self.api_version,
+                api_version=self.api_version
             )
-    
-    def _python_function_to_openai_tool(self, func, name: str, function_type: str = "tool") -> Dict[str, Any]:
+
+    # ========================================================================
+    # PROVIDER-SPECIFIC HELPER METHODS
+    # ========================================================================
+
+    def _accumulate_usage_safely(self, current_usage: Dict[str, Any], accumulated_usage: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Convert a Python function to OpenAI tool format using function inspection.
+        Safely accumulate usage metadata without in-place mutations.
         
         Args:
-            func: Python callable function
-            name: Function name
-            function_type: "tool" for regular tools, "background_task" for background tasks
-            
+            current_usage: Current usage metadata
+            accumulated_usage: Previously accumulated usage (optional)
+        
         Returns:
-            Dictionary in OpenAI tool format
+            New accumulated usage dictionary
         """
+        if accumulated_usage is None:
+            return current_usage
+        
+        return {
+            "input_tokens": accumulated_usage["input_tokens"] + current_usage["input_tokens"],
+            "output_tokens": accumulated_usage["output_tokens"] + current_usage["output_tokens"],
+            "total_tokens": accumulated_usage["total_tokens"] + current_usage["total_tokens"],
+            "thinking_tokens": accumulated_usage["thinking_tokens"] + current_usage["thinking_tokens"],
+            "tool_calling_tokens": accumulated_usage["tool_calling_tokens"] + current_usage["tool_calling_tokens"],
+            "provider": current_usage["provider"],
+            "model": current_usage["model"],
+            "request_id": current_usage["request_id"]
+        }
+
+    def _convert_messages_to_response_input(self, messages: List[Dict]) -> List[Dict]:
+        """Convert OpenAI-style messages to Azure ResponseInputParam format."""
+        response_input = []
+        for message in messages:
+            response_message = {
+                "type": "message",
+                "role": message["role"],
+                "content": message["content"]
+            }
+            response_input.append(response_message)
+        return response_input
+
+    def _convert_functions_to_azure_format(self, functions: Union[List[Dict], Dict[str, Any]], is_background: bool = False) -> List[Dict]:
+        """
+        Unified method to convert functions to Azure format.
+        
+        Args:
+            functions: Either list of tool schemas or dict of callable functions
+            is_background: Whether these are background tasks
+        
+        Returns:
+            List of Azure-formatted function definitions
+        """
+        azure_functions = []
+        
+        if isinstance(functions, list):
+            # Handle pre-defined tool schemas
+            for tool in functions:
+                # Get tool properties
+                description = tool.get("description", "")
+                
+                # Enhance description for background tasks
+                if is_background:
+                    description = f"BACKGROUND TASK: {description}. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
+                
+                # Ensure additionalProperties is False for strict mode
+                parameters = tool.get("parameters", {})
+                if isinstance(parameters, dict) and "additionalProperties" not in parameters:
+                    parameters["additionalProperties"] = False
+
+                azure_functions.append({
+                    "type": "function",
+                    "name": tool.get("name"),
+                    "description": description,
+                    "parameters": parameters,
+                    "strict": True  # Required for structured output
+                })
+        
+        elif isinstance(functions, dict):
+            # Handle callable Python functions
+            for name, func in functions.items():
+                try:
+                    function_def = self._python_function_to_azure_function(func, name, is_background=is_background)
+                    function_def["type"] = "function"  # Add type to create flat structure
+                    azure_functions.append(function_def)
+                except Exception as e:
+                    self.logger.warning(f"Failed to convert {'background task' if is_background else 'function'} {name}: {str(e)}")
+                    continue
+        
+        return azure_functions
+
+    def _python_function_to_azure_function(self, func, name: str, is_background: bool = False) -> Dict[str, Any]:
+        """Convert a Python function to Azure function format using introspection."""
         try:
             # Get function signature
             sig = inspect.signature(func)
@@ -140,7 +234,7 @@ class AzureClient(BaseLLMClient):
             description = description.strip()
             
             # Enhance description for background tasks
-            if function_type == "background_task":
+            if is_background:
                 description = f"BACKGROUND TASK: {description}. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
             
             # Build parameters schema
@@ -163,8 +257,7 @@ class AzureClient(BaseLLMClient):
                     "description": f"{param_name} parameter"
                 }
                 
-                # For strict mode, ALL parameters must be in required array
-                # regardless of default values
+                # For Azure strict mode, ALL parameters must be in required array
                 required.append(param_name)
                 
                 # Add default value info to description
@@ -173,7 +266,6 @@ class AzureClient(BaseLLMClient):
                 
                 properties[param_name] = param_def
             
-            # Build the function definition (without outer wrapper)
             return {
                 "name": name,
                 "description": description,
@@ -190,7 +282,7 @@ class AzureClient(BaseLLMClient):
             self.logger.warning(f"Failed to inspect function {name}: {str(e)}")
             # Return basic fallback schema
             description = f"Execute {name} function"
-            if function_type == "background_task":
+            if is_background:
                 description = f"BACKGROUND TASK: {description}. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
             
             return {
@@ -204,18 +296,9 @@ class AzureClient(BaseLLMClient):
                 },
                 "strict": True
             }
-    
+
     def _python_type_to_json_schema_type(self, python_type) -> str:
-        """
-        Convert Python type annotations to JSON schema types.
-        
-        Args:
-            python_type: Python type annotation
-            
-        Returns:
-            JSON schema type string
-        """
-        # Handle common types
+        """Convert Python type annotations to JSON schema types."""
         if python_type == str:
             return "string"
         elif python_type == int:
@@ -229,248 +312,98 @@ class AzureClient(BaseLLMClient):
         elif python_type == dict or (hasattr(python_type, '__origin__') and python_type.__origin__ == dict):
             return "object"
         else:
-            # Default to string for unknown types
-            return "string"
-    
-    def _convert_functions_to_llm_format(
-        self, 
-        functions: Union[List[Dict], Dict[str, Any]], 
-        function_type: str = "tool"
-    ) -> List[Dict]:
-        """
-        Convert functions to OpenAI tool format.
-        
-        Args:
-            functions: Either List of JSON schema tool dictionaries or Dict of callable functions
-            function_type: "tool" for regular tools, "background_task" for background tasks
-            
-        Returns:
-            List of function definition dictionaries in OpenAI format
-        """
-        azure_functions = []
-        
-        # Handle JSON schema tool dictionaries (from tools_list)
-        if isinstance(functions, list):
-            for tool in functions:
-                # Get tool properties
-                description = tool.get("description", "")
-                
-                # Enhance description for background tasks
-                if function_type == "background_task":
-                    description = f"BACKGROUND TASK: {description}. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
-                
-                # Ensure additionalProperties is False for strict mode
-                parameters = tool.get("parameters", {})
-                if isinstance(parameters, dict) and "additionalProperties" not in parameters:
-                    parameters["additionalProperties"] = False
+            return "string"  # Default to string for unknown types
 
-                # Create standardized flat tool format
-                azure_functions.append({
-                    "type": "function",
-                    "name": tool.get("name"),
-                    "description": description,
-                    "parameters": parameters,
-                    "strict": True  # Required for structured output
-                })
-                
-        # Handle callable Python functions (from background_tasks or callable_functions)
-        elif isinstance(functions, dict):
-            for name, callable_func in functions.items():
-                try:
-                    # Use function inspection helper for background tasks
-                    if function_type == "background_task":
-                        function_tool = self._python_function_to_openai_tool(callable_func, name, function_type)
-                        # Add type to create flat structure
-                        function_tool["type"] = "function"
-                        azure_functions.append(function_tool)
-                    else:
-                        # For regular callable functions, use basic parameter extraction
-                        description = callable_func.__doc__ or name
-                        
-                        parameters = {
-                            "type": "object",
-                            "properties": {},
-                            "required": [],
-                            "additionalProperties": False  # Required for strict mode
-                        }
-                        
-                        azure_functions.append({
-                            "type": "function",
-                            "name": name,
-                            "description": description,
-                            "parameters": parameters,
-                            "strict": True  # Required for structured output
-                        })
-                    
-                except Exception as e:
-                    self.logger.warning(f"Failed to convert function {name}: {str(e)}")
-                    continue
-        
-        return azure_functions
-    
-    def _prepare_tools_context(self, input: ILLMInput) -> Tuple[List, str]:
+    def _process_function_calls_for_orchestrator(self, function_calls, input: ILLMInput) -> tuple:
         """
-        Prepare Azure OpenAI-specific tools and enhanced context instructions.
+        Process function calls and prepare them for the orchestrator using object-based approach.
         
         Args:
+            function_calls: Function calls from Azure response
             input: The LLM input
             
         Returns:
-            Tuple of (azure_tools_list, enhanced_context_instructions)
+            Tuple of (function_calls_list, structured_response)
         """
-        # Convert tools to Azure OpenAI format using unified method
-        azure_tools = []
-        if input.tools_list and len(input.tools_list) > 0:
-            azure_tools.extend(
-                self._convert_functions_to_llm_format(input.tools_list, function_type="tool")
-            )
+        function_calls_list = []
+        structured_response = None
         
-        if input.background_tasks and len(input.background_tasks) > 0:
-            azure_tools.extend(
-                self._convert_functions_to_llm_format(input.background_tasks, function_type="background_task")
-            )
-        
-        # Build enhanced instructions using generic utility
-        enhanced_instructions = build_enhanced_instructions(
-            structure_type=input.structure_type,
-            background_tasks=input.background_tasks
-        )
-        
-        return azure_tools, enhanced_instructions
-
-    def _convert_messages_to_response_input(self, messages: List[Dict]) -> List[Dict]:
-        """
-        Convert OpenAI-style messages to ResponseInputParam format.
-        
-        Args:
-            messages: List of OpenAI-style message dictionaries
-            
-        Returns:
-            List of ResponseInputParam items
-        """
-        response_input = []
-        for message in messages:
-            # Convert to EasyInputMessageParam format
-            response_message = {
-                "type": "message",
-                "role": message["role"],
-                "content": message["content"]
-            }
-            response_input.append(response_message)
-        return response_input
-
-    async def _process_function_calls(self, function_calls, input: ILLMInput, response_input: List[Dict]) -> bool:
-        """
-        Process function calls from LLM response and add results to response_input.
-        Handles both regular tools and background tasks consistently.
-        
-        Args:
-            function_calls: Function calls from LLM response (any format)
-            input: The original LLM input
-            response_input: ResponseInputParam list to append function results to
-            
-        Returns:
-            bool: True if regular tools were processed (continue conversation), False otherwise
-        """
-        if not function_calls:
-            return False
-            
-        # Create function call objects for orchestrator
-        class FunctionCall:
-            def __init__(self, name: str, args: dict):
-                self.name = name
-                self.args = args
-        
-        generic_function_calls = []
-        has_regular_functions = False  # Initialize before the loop
-        
-        for func_call in function_calls:
-            # Extract function details (handles both responses.parse and responses.stream formats)
-            if hasattr(func_call, 'arguments'):
-                function_args = json.loads(func_call.arguments) if func_call.arguments else {}
-            else:
-                function_args = {}
+        for i, func_call in enumerate(function_calls):
             function_name = func_call.name
+            try:
+                # Extract function args (handles Azure response format)
+                if hasattr(func_call, 'arguments'):
+                    function_args = json.loads(func_call.arguments) if func_call.arguments else {}
+                else:
+                    function_args = {}
+            except json.JSONDecodeError:
+                self.logger.warning(f"Failed to parse function arguments for {function_name}")
+                function_args = {}
             
-            # Track if we have regular functions (affects continuation logic)
-            if function_name in (input.callable_functions or {}):
-                has_regular_functions = True
-            elif function_name not in (input.background_tasks or {}):
+            # Create unique call_id to track individual function calls
+            call_id = f"{function_name}_{i}"
+            
+            # Check if it's a background task
+            if function_name in (input.background_tasks or {}):
+                function_calls_list.append(FunctionCall(
+                    name=function_name,
+                    args=function_args,
+                    call_id=call_id,
+                    is_background=True
+                ))
+            # Check if it's a regular function
+            elif function_name in (input.callable_functions or {}):
+                function_calls_list.append(FunctionCall(
+                    name=function_name,
+                    args=function_args,
+                    call_id=call_id,
+                    is_background=False
+                ))
+            else:
                 self.logger.warning(f"Function {function_name} not found in available functions or background tasks")
-                continue
-                
-            generic_function_calls.append(FunctionCall(name=function_name, args=function_args))
         
-        if not generic_function_calls:
-            return False
-            
-        # Execute all functions (regular + background) via orchestrator
-        execution_results = await self._function_orchestrator.process_function_calls_from_response(
-            generic_function_calls,
-            input.callable_functions or {},
-            input.background_tasks or {}
-        )
-        
-        # Add results to response_input
-        self._add_function_results_to_response_input(execution_results, response_input, generic_function_calls)
-        
-        self.logger.info(f"Processed {len(generic_function_calls)} function calls, regular tools: {has_regular_functions}")
-        
-        return has_regular_functions
+        return function_calls_list, structured_response
 
-    def _add_function_results_to_response_input(self, execution_results: Dict, response_input: List[Dict], function_calls: List) -> None:
-        """
-        Add function execution results to response_input in responses API format.
-        
-        Args:
-            execution_results: Results from function orchestrator
-            response_input: ResponseInputParam list to append to
-            function_calls: Original function calls with call_id info
-        """
-        # Add function results as FunctionCallOutput items
-        function_results = execution_results.get('function_results', [])
-        function_names = execution_results.get('function_names', [])
-        for (index, (name, result)) in enumerate(zip(function_names, function_results)):
-            function_output = {
+    def _add_function_results_to_response_input(self, execution_result: Dict, response_input: List[Dict]) -> None:
+        """Add function execution results to response_input in Azure format."""
+        # Add function results as messages
+        for result in execution_result.get('regular_results', []):
+            response_input.append({
                 "type": "message",
                 "role": "user",
-                "content": f"Function '{name}' called with arguments {function_calls[index].args} returned: {result}"
-            }
-            response_input.append(function_output)
-    
-        # Add background task notifications as user messages (if any)
-        for bg_message in execution_results.get('background_initiated', []):
+                "content": f"Function '{result['name']}' called with arguments {result['args']} returned: {result['result']}"
+            })
+        
+        # Add background task notifications
+        for bg_message in execution_result.get('background_initiated', []):
             response_input.append({
                 "type": "message",
                 "role": "user",
                 "content": f"Background task initiated: {bg_message}"
             })
-
-        if function_results:
-            completion_msg = f"All {len(function_results)} function(s) completed. Please provide your response based on these results."
+        
+        # Add completion message if we have results
+        if execution_result.get('regular_results'):
+            completion_msg = f"All {len(execution_result['regular_results'])} function(s) completed. Please provide your response based on these results."
             response_input.append({
                 "type": "message",
                 "role": "user",
                 "content": completion_msg
             })
 
+    # ========================================================================
+    # FRAMEWORK-REQUIRED ABSTRACT METHODS
+    # ========================================================================
+
     async def _chat_simple(self, input: ILLMInput) -> Dict[str, Any]:
-        """
-        Handle simple chat without tools or background tasks using responses.parse().
-        
-        Args:
-            input: The LLM input
-            
-        Returns:
-            Dict containing the LLM response and usage information
-        """
+        """Handle simple chat without tools or background tasks."""
         # Build base context in OpenAI format first
         messages = [
             {"role": "system", "content": input.system_prompt},
             {"role": "user", "content": input.user_message}
         ]
         
-        # Convert to ResponseInputParam format
+        # Convert to Azure ResponseInputParam format
         response_input = self._convert_messages_to_response_input(messages)
         
         # Prepare arguments for responses.parse()
@@ -484,14 +417,19 @@ class AzureClient(BaseLLMClient):
         # Add text_format for structured output if needed
         if input.structure_type:
             kwargs["text_format"] = input.structure_type
+            # Add structure instructions to system prompt  
+            response_input[0]["content"] += STRUCTURE_INSTRUCTIONS_TEMPLATE
         
         response: ParsedResponse = self._client.responses.parse(**kwargs)
         
         # Process usage metadata
-        usage = None
-        if hasattr(response, "usage") and response.usage:
-            usage = standardize_usage_metadata(response.usage, provider="azure")
-
+        usage = self._standardize_usage_metadata(
+            response.usage if hasattr(response, 'usage') else None,
+            self._get_provider_name(),
+            self.config.model,
+            getattr(response, 'id', None)
+        )
+        
         # Handle response based on whether it's structured or not
         if input.structure_type:
             # For structured output, extract the parsed content
@@ -510,33 +448,35 @@ class AzureClient(BaseLLMClient):
             # For unstructured output, use the output_text property
             return {"llm_response": response.output_text, "usage": usage}
 
-    async def _chat_with_tools(self, input: ILLMInput) -> Dict[str, Any]:
-        """
-        Handle complex chat with tools and/or background tasks using responses.parse().
-        
-        Args:
-            input: The LLM input
-            
-        Returns:
-            Dict containing the LLM response and usage information
-        """
+    async def _chat_with_functions(self, input: ILLMInput) -> Dict[str, Any]:
+        """Handle complex chat with tools and/or background tasks."""
         # Build base context and prepare tools
         messages = [
             {"role": "system", "content": input.system_prompt},
             {"role": "user", "content": input.user_message}
         ]
-        azure_tools, enhanced_instructions = self._prepare_tools_context(input)
-        messages[0]["content"] += enhanced_instructions
         
-        # Convert to ResponseInputParam format
+        # Prepare tools for Azure
+        azure_tools = []
+        
+        # Add regular tools
+        if input.tools_list:
+            azure_tools.extend(self._convert_functions_to_azure_format(input.tools_list, is_background=False))
+        
+        # Add background tasks
+        if input.background_tasks:
+            azure_tools.extend(self._convert_functions_to_azure_format(input.background_tasks, is_background=True))
+        
+        # Convert to Azure ResponseInputParam format
         response_input = self._convert_messages_to_response_input(messages)
         
-        # Handle complex cases with function calling (multi-turn using previous_response_id)
+        # Multi-turn conversation for function calling
         current_turn = 0
         accumulated_usage = None
+        
         while current_turn < input.max_turns:
-            self.logger.info(f"Current turn: {current_turn}")
-            has_regular_functions = False
+            self.logger.info(f"Function calling turn: {current_turn}")
+            
             try:
                 start_time = time.time()
                 
@@ -548,30 +488,57 @@ class AzureClient(BaseLLMClient):
                     "tools": azure_tools if azure_tools else None,
                     "input": response_input
                 }
+                
                 # Add text_format for structured output if needed
                 if input.structure_type:
                     kwargs["text_format"] = input.structure_type
+                    # Add structure instructions to system prompt
+                    response_input[0]["content"] += STRUCTURE_INSTRUCTIONS_TEMPLATE
                 
-                response =  self._client.responses.parse(**kwargs)
-                self.logger.info(f"🔍response time: {time.time() - start_time}")
+                response = self._client.responses.parse(**kwargs)
+                self.logger.info(f"Response time: {time.time() - start_time:.2f}s")
                 
-                # Process usage metadata safely
+                # Process usage metadata using framework standardization
                 if hasattr(response, "usage") and response.usage:
-                    current_usage = standardize_usage_metadata(response.usage, provider="azure")
-                    accumulated_usage = accumulate_usage_safely(current_usage, accumulated_usage)
-
+                    current_usage = self._standardize_usage_metadata(
+                        response.usage, self._get_provider_name(), self.config.model, getattr(response, 'id', None)
+                    )
+                    accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
+                
                 # Check for function calls in output
                 function_calls = [output_item for output_item in response.output if output_item.type == "function_call"]
-
+                
                 if function_calls:
                     self.logger.info(f"Turn {current_turn}: Found {len(function_calls)} function calls")
                     
-                    # Process function calls using unified method
-                    has_regular_functions = await self._process_function_calls(function_calls, input, response_input)
-                    if has_regular_functions:
-                        current_turn += 1
-                        continue
+                    # Process function calls for orchestrator
+                    function_calls_list, structured_response = self._process_function_calls_for_orchestrator(function_calls, input)
                     
+                    # If we got a structured response, return it immediately
+                    if structured_response is not None:
+                        self.logger.info(f"Turn {current_turn}: Received structured response via function call")
+                        return {"llm_response": structured_response, "usage": accumulated_usage}
+                    
+                    # Execute functions via orchestrator using new object-based approach
+                    if function_calls_list:
+                        # Create execution input
+                        execution_input = FunctionExecutionInput(
+                            function_calls=function_calls_list,
+                            available_functions=input.callable_functions or {},
+                            available_background_tasks=input.background_tasks or {}
+                        )
+                        
+                        execution_result = await self._execute_functions_with_orchestrator(execution_input)
+                        
+                        # Add function results to conversation
+                        self._add_function_results_to_response_input(execution_result, response_input)
+                        
+                        # Continue if we have regular functions (need to continue conversation)
+                        regular_function_calls = [call for call in function_calls_list if not call.is_background]
+                        if regular_function_calls:
+                            current_turn += 1
+                            continue
+                
                 # Check for structured response
                 if input.structure_type:
                     llm_response = None
@@ -594,45 +561,33 @@ class AzureClient(BaseLLMClient):
                         self.logger.info(f"Turn {current_turn}: Received structured response")
                         return {"llm_response": llm_response, "usage": accumulated_usage}
                 
-                # Check for text response
-                else:
+                # Return text response
+                if hasattr(response, 'output_text') and response.output_text:
                     self.logger.info(f"Turn {current_turn}: Received text response")
-                    self.logger.info(f"🔍response: {response.output_text}")
                     return {"llm_response": response.output_text, "usage": accumulated_usage}
-
+                
             except Exception as e:
-                self.logger.error(
-                    f"Error in Azure chat_with_tools turn {current_turn}: {str(e)}"
-                )
-                self.logger.error(traceback.format_exc())
+                self.logger.error(f"Error in Azure chat_with_functions turn {current_turn}: {str(e)}")
                 return {
                     "llm_response": f"An error occurred: {str(e)}",
                     "usage": accumulated_usage,
                 }
-
+        
         # Handle max turns reached
         return {
             "llm_response": "Maximum number of function calling turns reached",
             "usage": accumulated_usage,
         }
-    
+
     async def _stream_simple(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
-        """
-        Handle simple streaming without tools or background tasks using responses.stream().
-        
-        Args:
-            input: The LLM input
-            
-        Yields:
-            Dict containing streaming response chunks and usage information
-        """
+        """Handle simple streaming without tools or background tasks."""
         # Build base context in OpenAI format first
         messages = [
             {"role": "system", "content": input.system_prompt},
             {"role": "user", "content": input.user_message}
         ]
         
-        # Convert to ResponseInputParam format  
+        # Convert to Azure ResponseInputParam format  
         response_input = self._convert_messages_to_response_input(messages)
         
         # Prepare arguments for responses.stream()
@@ -647,18 +602,22 @@ class AzureClient(BaseLLMClient):
         if input.structure_type:
             sdk_structure_type = convert_typeddict_to_basemodel(input.structure_type)
             kwargs["text_format"] = sdk_structure_type
+            # Add structure instructions to system prompt
+            response_input[0]["content"] += STRUCTURE_INSTRUCTIONS_TEMPLATE
         
         # Use proper ResponseStreamManager pattern
         with self._client.responses.stream(**kwargs) as stream:
             accumulated_usage = None
             collected_text = ""
+            
             # Process streaming events
             for event in stream:
-                # self.logger.info(f"🔍event: {event}")
                 if hasattr(event, "response") and hasattr(event.response, "usage") and event.response.usage:
                     # Usage from ResponseIncompleteEvent or ResponseCompletedEvent
-                    current_usage = standardize_usage_metadata(event.response.usage, provider="azure")
-                    accumulated_usage = accumulate_usage_safely(current_usage, accumulated_usage)
+                    current_usage = self._standardize_usage_metadata(
+                        event.response.usage, self._get_provider_name(), self.config.model
+                    )
+                    accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
                 
                 # Handle text delta events - progressive streaming
                 if "response.output_text.delta" in event.type and hasattr(event, "delta"):
@@ -677,35 +636,36 @@ class AzureClient(BaseLLMClient):
             # Final yield with usage information
             yield {"llm_response": None, "usage": accumulated_usage}
 
-    async def _stream_with_tools(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
-        """
-        Handle complex streaming with tools and/or background tasks using responses.stream().
-        
-        Args:
-            input: The LLM input
-            
-        Yields:
-            Dict containing streaming response chunks and usage information
-        """
+    async def _stream_with_functions(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
+        """Handle complex streaming with tools and/or background tasks."""
         # Build base context and prepare tools
         messages = [
             {"role": "system", "content": input.system_prompt},
             {"role": "user", "content": input.user_message}
         ]
-        azure_tools, enhanced_instructions = self._prepare_tools_context(input)
-        messages[0]["content"] += enhanced_instructions
         
-        # Convert to ResponseInputParam format
+        # Prepare tools for Azure
+        azure_tools = []
+        
+        # Add regular tools
+        if input.tools_list:
+            azure_tools.extend(self._convert_functions_to_azure_format(input.tools_list, is_background=False))
+        
+        # Add background tasks
+        if input.background_tasks:
+            azure_tools.extend(self._convert_functions_to_azure_format(input.background_tasks, is_background=True))
+        
+        # Convert to Azure ResponseInputParam format
         response_input = self._convert_messages_to_response_input(messages)
         
-        # Handle complex cases with function calling (multi-turn using previous_response_id)
+        # Multi-turn streaming conversation for function calling  
         current_turn = 0
         accumulated_usage = None
-
+        
         while current_turn < input.max_turns:
-            self.logger.info(f"Current turn: {current_turn}")
+            self.logger.info(f"Stream function calling turn: {current_turn}")
             has_regular_functions = False
-
+            
             try:
                 # Prepare arguments for responses.stream()
                 kwargs = {
@@ -717,11 +677,12 @@ class AzureClient(BaseLLMClient):
                     "input": response_input
                 }
                 
-                # Add text_format for structured output if needed (convert TypedDict to BaseModel)
+                # Add text_format for structured output if needed
                 if input.structure_type:
-                    # Convert TypedDict to BaseModel for SDK compatibility
                     sdk_structure_type = convert_typeddict_to_basemodel(input.structure_type)
                     kwargs["text_format"] = sdk_structure_type
+                    # Add structure instructions to system prompt
+                    response_input[0]["content"] += STRUCTURE_INSTRUCTIONS_TEMPLATE
                 
                 # Generate streaming content with tools using responses API
                 with self._client.responses.stream(**kwargs) as stream:
@@ -733,13 +694,15 @@ class AzureClient(BaseLLMClient):
 
                     self.logger.debug(f"Starting stream processing for turn {current_turn}")
 
-                    # Process streaming response events - collect function calls and text
+                    # Process streaming response events
                     for event in stream:
                         chunk_count += 1                        
                         # Handle usage metadata from response completion events
                         if hasattr(event, "response") and hasattr(event.response, "usage") and event.response.usage:
-                            current_usage = standardize_usage_metadata(event.response.usage, provider="azure")
-                            accumulated_usage = accumulate_usage_safely(current_usage, accumulated_usage)
+                            current_usage = self._standardize_usage_metadata(
+                                event.response.usage, self._get_provider_name(), self.config.model
+                            )
+                            accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
                         
                         # Handle function call arguments completion  
                         if event.type == "response.output_item.done" and event.item.type == 'function_call':
@@ -762,28 +725,49 @@ class AzureClient(BaseLLMClient):
                         
                     self.logger.debug(f"Turn {current_turn}: Stream ended. Processed {chunk_count} chunks. Function calls: {len(function_calls)}, Text collected: {len(collected_text)} chars")
 
-                    # Process function calls if any were collected using unified method
+                    # Process function calls if any were collected
                     if function_calls:
-                        has_regular_functions = await self._process_function_calls(function_calls, input, response_input)
+                        # Process function calls for orchestrator
+                        function_calls_list, structured_response = self._process_function_calls_for_orchestrator(function_calls, input)
                         
-                    self.logger.info(f"🔍has_regular_functions: {has_regular_functions}")
-                    if not has_regular_functions:
-                        # Stream completed
-                        self.logger.debug(f"Turn {current_turn}: Stream completed")
-                        break
+                        # If we got a structured response, yield it and break
+                        if structured_response is not None:
+                            yield {"llm_response": structured_response, "usage": accumulated_usage}
+                            break
+                        
+                        # Execute functions via orchestrator using new object-based approach
+                        if function_calls_list:
+                            # Create execution input
+                            execution_input = FunctionExecutionInput(
+                                function_calls=function_calls_list,
+                                available_functions=input.callable_functions or {},
+                                available_background_tasks=input.background_tasks or {}
+                            )
+                            
+                            execution_result = await self._execute_functions_with_orchestrator(execution_input)
+                            
+                            # Add function results to conversation
+                            self._add_function_results_to_response_input(execution_result, response_input)
+                            
+                            # Continue if we have regular functions
+                            regular_function_calls = [call for call in function_calls_list if not call.is_background]
+                            if regular_function_calls:
+                                has_regular_functions = True
+                                current_turn += 1
+                                continue
                 
-                    current_turn += 1
-                    self.logger.debug(f"Turn {current_turn}: Continuing - regular tools need processing")
-
+                # Stream completed for this turn
+                self.logger.debug(f"Turn {current_turn}: Stream completed")
+                break
+                
             except Exception as e:
-                self.logger.error(f"Error in Azure stream_with_tools turn {current_turn}: {str(e)}")
-                self.logger.error(traceback.format_exc())
+                self.logger.error(f"Error in Azure stream_with_functions turn {current_turn}: {str(e)}")
                 yield {
                     "llm_response": f"An error occurred: {str(e)}",
                     "usage": accumulated_usage,
                 }
                 return
-
+        
         # Handle max turns reached
         if current_turn >= input.max_turns:
             self.logger.warning(f"Maximum turns reached: {current_turn} >= {input.max_turns}")
@@ -792,5 +776,5 @@ class AzureClient(BaseLLMClient):
                 "usage": accumulated_usage,
             }
         else:
-            # Final usage yield
+            # Final usage yield if no structured response was returned
             yield {"llm_response": None, "usage": accumulated_usage}
