@@ -1,0 +1,66 @@
+# Complete end-to-end test configuration for Arshai observability
+llm:
+  provider: openai
+  model: gpt-3.5-turbo
+  temperature: 0.7
+  max_tokens: 150
+
+observability:
+  # Service identification
+  service_name: "arshai-e2e-test"
+  service_version: "1.0.0"
+  environment: "test"
+  
+  # Core controls (always enabled)
+  trace_requests: true
+  collect_metrics: true
+  
+  # Key metrics tracking
+  track_token_timing: true
+  stream_chunk_timeout: 30.0
+  
+  # Privacy settings (safe for testing)
+  log_prompts: true
+  log_responses: true
+  max_prompt_length: 2000
+  max_response_length: 2000
+  
+  # OpenTelemetry export configuration
+  otlp_endpoint: "http://localhost:4317"
+  otlp_timeout: 10
+  
+  # Non-intrusive mode (recommended)
+  non_intrusive: true
+  
+  # Custom attributes for traces
+  custom_attributes:
+    test_type: "e2e"
+    component: "llm-client"
+    version: "test"
+  
+  # Provider-specific configurations
+  provider_configs:
+    openai:
+      track_token_timing: true
+    azure:
+      track_token_timing: true
+    anthropic:
+      track_token_timing: true
+    google:
+      track_token_timing: true
+    openrouter:
+      track_token_timing: true
+  
+  # Metrics configuration
+  metric_export_interval: 5  # Fast export for testing
+  histogram_boundaries: [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0]
+  
+  # Tracing configuration
+  trace_sampling_rate: 1.0  # 100% sampling for testing
+  max_span_attributes: 128
+
+# Memory configuration (optional for testing)
+memory:
+  working_memory:
+    provider: in_memory
+    ttl: 3600

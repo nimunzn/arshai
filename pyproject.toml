@@ -55,14 +55,20 @@ unstructured = "^0.17.2"
 mcp = "^1.10.1"
 google-genai = {version = "^1.25.0", optional = true}
 google-auth = {version = "^2.0.0", optional = true}
+# Observability dependencies (optional)
+opentelemetry-api = {version = "^1.20.0", optional = true}
+opentelemetry-sdk = {version = "^1.20.0", optional = true}
+opentelemetry-exporter-otlp-proto-grpc = {version = "^1.20.0", optional = true}
+opentelemetry-exporter-otlp-proto-http = {version = "^1.20.0", optional = true}
 
 [tool.poetry.extras]
 redis = ["redis"]
 milvus = ["pymilvus"]
 rerankers = ["flashrank"]
 gemini = ["google-genai", "google-auth"]
+observability = ["opentelemetry-api", "opentelemetry-sdk", "opentelemetry-exporter-otlp-proto-grpc", "opentelemetry-exporter-otlp-proto-http"]
 docs = ["sphinx", "sphinx-rtd-theme", "sphinx-autodoc-typehints", "myst-parser", "sphinx-copybutton", "sphinxcontrib-mermaid", "furo"]
-all = ["redis", "pymilvus", "flashrank", "google-genai", "google-auth"]
+all = ["redis", "pymilvus", "flashrank", "google-genai", "google-auth", "opentelemetry-api", "opentelemetry-sdk", "opentelemetry-exporter-otlp-proto-grpc", "opentelemetry-exporter-otlp-proto-http"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.0.0"
