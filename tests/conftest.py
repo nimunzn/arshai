@@ -9,7 +9,7 @@ import pytest
 from unittest.mock import MagicMock
 
 from arshai.core.interfaces import IAgentConfig, IAgentInput
-from arshai.core.interfaces import ILLMConfig, ILLMInput, LLMInputType
+from arshai.core.interfaces import ILLMConfig, ILLMInput
 from arshai.core.interfaces import ConversationMemoryType, IMemoryInput, IWorkingMemory, IMemoryManager
 from arshai.core.interfaces import ITool
 
@@ -64,11 +64,10 @@ def agent_input():
 def llm_input():
     """Create a basic LLM input for testing."""
     return ILLMInput(
-        input_type=LLMInputType.CHAT_COMPLETION,
         system_prompt="You are a helpful assistant",
         user_message="Hello, this is a test message",
-        tools_list=[],
-        callable_functions={},
+        regular_functions={},
+        background_tasks={},
         structure_type=None
     )
 
