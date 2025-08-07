@@ -626,4 +626,3 @@ For questions about implementation details or architectural decisions, refer to 
 - **[LLM Architecture Overview](../technical/llm_architecture.md)**: Comprehensive understanding of the framework's design principles and architecture
 - **[User Guide](../guides/llm_usage.md)**: See how your provider implementation will be used by framework users
 - **[Implementation README](../../arshai/llms/README.md)**: Critical implementation notes, step-by-step guidance, and common pitfalls
-- **[Architecture Decisions](../../ARCHITECTURE_DECISIONS.md)**: Historical context and reasoning behind current architectural patterns
