@@ -20,7 +20,7 @@ from arshai.llms.utils import (
     parse_to_structure,
     convert_typeddict_to_basemodel,
 )
-from arshai.llms.utils.function_execution import FunctionCall, FunctionExecutionInput
+from arshai.llms.utils.function_execution import FunctionCall, FunctionExecutionInput, StreamingExecutionState
 
 T = TypeVar("T")
 
@@ -632,14 +632,16 @@ class OpenAIClient(BaseLLMClient):
                     "stream": True,
                 }
                 
-                # Store collected message and tool calls
-                collected_message = {"content": "", "tool_calls": []}
+                # Progressive streaming state management
+                streaming_state = StreamingExecutionState()
                 collected_text = ""
                 chunk_count = 0
+                # Track tool calls for progressive processing
+                tool_calls_in_progress = {}
                 
-                self.logger.debug(f"Starting stream processing for turn {current_turn}")
+                self.logger.debug(f"Starting progressive stream processing for turn {current_turn}")
                 
-                # Process streaming response
+                # Process streaming response with progressive function execution
                 for chunk in self._client.chat.completions.create(**kwargs):
                     chunk_count += 1
                     # Handle usage metadata
@@ -657,26 +659,25 @@ class OpenAIClient(BaseLLMClient):
                     
                     # Handle content streaming
                     if hasattr(delta, 'content') and delta.content is not None:
-                        collected_message["content"] += delta.content
                         collected_text += delta.content
                         # For structured output, we only yield content via function calls, not direct content
                         if not input.structure_type:
                             yield {"llm_response": collected_text}
                     
-                    # Handle tool calls streaming
+                    # Handle tool calls streaming with progressive execution
                     if hasattr(delta, 'tool_calls') and delta.tool_calls:
                         for tool_delta in delta.tool_calls:
                             # Use the index from the tool_delta
                             tool_index = tool_delta.index
                             
-                            # Ensure we have enough slots in the array
-                            while len(collected_message["tool_calls"]) <= tool_index:
-                                collected_message["tool_calls"].append({
+                            # Initialize tool call tracking if needed
+                            if tool_index not in tool_calls_in_progress:
+                                tool_calls_in_progress[tool_index] = {
                                     "id": "",
                                     "function": {"name": "", "arguments": ""}
-                                })
+                                }
                             
-                            current_tool_call = collected_message["tool_calls"][tool_index]
+                            current_tool_call = tool_calls_in_progress[tool_index]
                             
                             # Update tool call with new delta information
                             if tool_delta.id:
@@ -688,51 +689,79 @@ class OpenAIClient(BaseLLMClient):
                                     
                                 if tool_delta.function.arguments:
                                     current_tool_call["function"]["arguments"] += tool_delta.function.arguments
+                            
+                            # Check if this is a structure output function
+                            if (input.structure_type and 
+                                current_tool_call["function"]["name"] and 
+                                current_tool_call["function"]["name"].lower() == input.structure_type.__name__.lower()):
+                                
+                                try:
+                                    # For structure functions, double-check JSON completeness
+                                    is_complete, fixed_json = is_json_complete(current_tool_call["function"]["arguments"])
+                                    if not is_complete:
+                                        continue  # Wait for more data
+                                    else:
+                                        # Use parse_to_structure for consistent parsing
+                                        structured_response = parse_to_structure(fixed_json, input.structure_type)
+                                        # Yield the structured response immediately
+                                        yield {"llm_response": structured_response, "usage": accumulated_usage}
+                                        # Mark that we've yielded a structure response
+                                except Exception as e:
+                                    self.logger.error(f"Failed to parse structure output progressively: {str(e)}")
+                                continue
+                            
+                            # Progressive execution: check if function is complete
+                            if self._is_function_complete(current_tool_call["function"]):
+                                function_name = current_tool_call["function"]["name"]
+                                
+                                # Regular function - execute progressively
+                                function_call = FunctionCall(
+                                    name=function_name,
+                                    args=json.loads(current_tool_call["function"]["arguments"]) if current_tool_call["function"]["arguments"] else {},
+                                    call_id=current_tool_call["id"] or f"{function_name}_{tool_index}",
+                                    is_background=function_name in (input.background_tasks or {})
+                                )
+                                
+                                # Execute progressively if not already executed
+                                if not streaming_state.is_already_executed(function_call):
+                                    self.logger.info(f"Executing function progressively: {function_call.name} at {time.time()}")
+                                    try:
+                                        task = await self._execute_function_progressively(function_call, input)
+                                        streaming_state.add_function_task(task, function_call)
+                                    except Exception as e:
+                                        self.logger.error(f"Progressive execution failed for {function_call.name}: {str(e)}")
                 
-                self.logger.debug(f"Turn {current_turn}: Stream ended. Processed {chunk_count} chunks. Tool calls: {len(collected_message['tool_calls'])}, Text collected: {len(collected_text)} chars")
+                self.logger.debug(f"Turn {current_turn}: Stream ended. Processed {chunk_count} chunks. "
+                               f"Tool calls: {len(tool_calls_in_progress)}, Text collected: {len(collected_text)} chars, "
+                               f"Progressive tasks: {len(streaming_state.active_function_tasks)}")
                 
-                # Process function calls if any were collected
-                if collected_message["tool_calls"]:
-                    # Create mock tool calls for processing
-                    class MockToolCall:
-                        def __init__(self, tc_dict):
-                            self.id = tc_dict["id"]
-                            self.function = type('obj', (object,), {
-                                'name': tc_dict["function"]["name"],
-                                'arguments': tc_dict["function"]["arguments"]
-                            })()
+                # Progressive streaming: gather results from executed functions
+                if streaming_state.active_function_tasks:
+                    self.logger.info(f"Gathering results from {len(streaming_state.active_function_tasks)} progressive function executions")
                     
-                    mock_tool_calls = [MockToolCall(tc) for tc in collected_message["tool_calls"] if tc["function"]["name"]]
-                    self.logger.info(f"Functions to call: {len(mock_tool_calls)}")
+                    # Gather progressive execution results
+                    execution_result = await self._gather_progressive_results(streaming_state.active_function_tasks)
                     
-                    # Process function calls for orchestrator
-                    function_calls_list, structured_response = self._process_function_calls_for_orchestrator(mock_tool_calls, input)
+                    # Add failed functions to context for model awareness
+                    if execution_result.get('failed_functions'):
+                        context_messages = []
+                        for msg in messages:
+                            if isinstance(msg, dict) and 'content' in msg:
+                                context_messages.append(msg['content'])
+                        self._add_failed_functions_to_context(execution_result['failed_functions'], context_messages)
+                        # Update messages with context
+                        if context_messages:
+                            messages.append({"role": "user", "content": context_messages[-1]})
                     
-                    # If we got a structured response, yield it and break
-                    if structured_response is not None:
-                        yield {"llm_response": structured_response, "usage": accumulated_usage}
-                        break
+                    # Add function results to conversation
+                    self._add_function_results_to_messages(execution_result, messages)
                     
-                    # Execute functions via orchestrator using new object-based approach
-                    if function_calls_list:
-                        # Create execution input
-                        execution_input = FunctionExecutionInput(
-                            function_calls=function_calls_list,
-                            available_functions=input.callable_functions or {},
-                            available_background_tasks=input.background_tasks or {}
-                        )
-                        
-                        execution_result = await self._execute_functions_with_orchestrator(execution_input)
-                        
-                        # Add function results to conversation
-                        self._add_function_results_to_messages(execution_result, messages)
-                        
-                        # Continue if we have regular functions
-                        regular_function_calls = [call for call in function_calls_list if not call.is_background]
-                        if regular_function_calls:
-                            has_regular_functions = True
-                            current_turn += 1
-                            continue
+                    # Check if we have regular function calls that require conversation continuation
+                    regular_results = execution_result.get('regular_results', [])
+                    if regular_results:
+                        has_regular_functions = True
+                        current_turn += 1
+                        continue
                 
                 # Stream completed for this turn
                 self.logger.debug(f"Turn {current_turn}: Stream completed")
