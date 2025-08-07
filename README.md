@@ -35,10 +35,11 @@ Arshai is designed to empower developers to build sophisticated AI applications 
 - **Workflow Orchestration**: Design complex multi-agent systems with directed graph workflows
 - **Memory Management**: Implement sophisticated conversation memory with multiple storage options
 - **Tool Integration**: Extend agent capabilities with custom tools and external integrations
-- **LLM Integration**: Connect with leading LLM providers (OpenAI, Azure OpenAI) with consistent APIs
+- **LLM Integration**: Connect with leading LLM providers (OpenAI, Azure OpenAI, Anthropic, Google Gemini) with consistent APIs
+- **Observability System**: Comprehensive monitoring and instrumentation for LLM interactions with OpenTelemetry support
 - **RAG Capabilities**: Build powerful retrieval-augmented generation systems with document processing
 - **Structured Outputs**: Enforce structured responses with schema validation
-- **Streaming Support**: Enable real-time streaming responses throughout the stack
+- **Streaming Support**: Enable real-time streaming responses with token-level performance tracking
 
 ## Architecture
 
@@ -54,6 +55,7 @@ classDiagram
         +ITool
         +ILLM
         +IVectorDBClient
+        +IObservabilityManager
     }
     
     class Implementation {
@@ -64,6 +66,7 @@ classDiagram
         +WebSearchTool
         +OpenAIClient
         +AzureClient
+        +ObservabilityManager
     }
     
     class Applications {
@@ -115,8 +118,31 @@ Extends agent capabilities with specific functionalities:
 Connects to large language models through a unified interface:
 - **OpenAI Provider**: Integration with OpenAI models
 - **Azure Provider**: Integration with Azure OpenAI service
+- **Anthropic Provider**: Integration with Claude models
+- **Google Provider**: Integration with Gemini models
+- **OpenRouter Provider**: Access to multiple models through OpenRouter
 - **Streaming Support**: Real-time response generation
 - **Function Calling**: Tool integration through function definitions
+
+#### Observability System
+
+Production-ready monitoring and instrumentation for AI systems with OpenTelemetry integration:
+
+**Key Metrics (Zero-Fallback Monitoring)**:
+- `llm_time_to_first_token_seconds` - Latency from request start to first token
+- `llm_time_to_last_token_seconds` - Total response generation time
+- `llm_duration_first_to_last_token_seconds` - Token generation duration
+- `llm_completion_tokens` - Accurate token counting per provider
+
+**Enterprise Features**:
+- **OpenTelemetry Native**: Export to Jaeger, Prometheus, Datadog, New Relic, any OTLP backend
+- **LLM Usage Data Integration**: Direct usage from LLM responses for accurate token counts
+- **Streaming Observability**: Real-time token-level timing for streaming responses
+- **Non-Intrusive Design**: Zero side effects on LLM calls with graceful degradation
+- **Factory Integration**: Automatic instrumentation through LLMFactory
+- **YAML Configuration**: Production-ready configuration management
+- **Privacy Controls**: Configurable prompt/response logging with length limits
+- **Performance Optimization**: Async methods for high-throughput scenarios
 
 ## Getting Started
 
@@ -130,7 +156,25 @@ pip install arshai
 poetry add arshai
 
 # With optional dependencies
-pip install arshai[all]  # Includes redis, milvus, flashrank
+pip install arshai[all]          # All features: redis, milvus, flashrank, observability
+pip install arshai[observability] # OpenTelemetry observability features
+pip install arshai[redis]        # Redis memory backend
+pip install arshai[milvus]       # Milvus vector database
+pip install arshai[flashrank]    # FlashRank reranking
+```
+
+#### Observability Dependencies
+
+For comprehensive observability features:
+
+```bash
+# Core OpenTelemetry packages
+pip install opentelemetry-api opentelemetry-sdk
+
+# OTLP exporters (choose based on your backend)
+pip install opentelemetry-exporter-otlp-proto-grpc  # For Jaeger, DataDog, etc.
+pip install opentelemetry-exporter-otlp-proto-http  # HTTP OTLP export
+
 ```
 
 ### Quick Start
@@ -249,6 +293,139 @@ response, usage = agent.process_message(
 print(f"Agent response with web search: {response}")
 ```
 
+### Observability and Monitoring
+
+Monitor your AI system's performance with comprehensive observability and OpenTelemetry integration:
+
+#### Quick Start with Observability
+
+```python
+from arshai.core.interfaces.illm import ILLMConfig, ILLMInput
+from src.factories.llm_factory import LLMFactory
+from arshai.observability import ObservabilityConfig
+
+# Configure observability from YAML
+config = ObservabilityConfig.from_yaml("config.yaml")
+
+# Create LLM client with automatic observability
+llm_config = ILLMConfig(model="gpt-4", temperature=0.7)
+client = LLMFactory.create_with_observability(
+    provider="openai",
+    config=llm_config,
+    observability_config=config
+)
+
+# All calls are automatically instrumented with zero side effects
+input_data = ILLMInput(
+    system_prompt="You are a helpful assistant.",
+    user_message="Explain machine learning in simple terms."
+)
+
+response = client.chat_completion(input_data)
+# Four key metrics automatically collected:
+# ✅ llm_time_to_first_token_seconds - Latency tracking
+# ✅ llm_time_to_last_token_seconds - Total response time
+# ✅ llm_duration_first_to_last_token_seconds - Generation duration
+# ✅ llm_completion_tokens - Accurate token counting
+
+print(f"Response: {response['llm_response']}")
+```
+
+#### Streaming Observability
+
+```python
+# Streaming responses with real-time token timing
+async for chunk in client.stream_completion(input_data):
+    if chunk.get('llm_response'):
+        print(chunk['llm_response'], end='', flush=True)
+    
+    # Final chunk contains usage metrics
+    if chunk.get('usage'):
+        usage = chunk['usage']
+        print(f"\n📊 Tokens: {usage.total_tokens}")
+        # All timing metrics automatically captured during streaming
+```
+
+#### Production Configuration
+
+```yaml
+# config.yaml - Production-ready observability setup
+observability:
+  # Service identification
+  service_name: "my-ai-app"
+  service_version: "1.0.0"
+  environment: "production"
+  
+  # Core controls (always enabled - no fallbacks)
+  trace_requests: true
+  collect_metrics: true
+  track_token_timing: true
+  
+  # OpenTelemetry export (works with any OTLP backend)
+  otlp_endpoint: "http://localhost:4317"  # Jaeger, DataDog, New Relic, etc.
+  otlp_timeout: 10
+  
+  # Privacy controls (recommended for production)
+  log_prompts: false
+  log_responses: false
+  max_prompt_length: 1000
+  max_response_length: 1000
+  
+  # Performance tuning
+  metric_export_interval: 60
+  trace_sampling_rate: 0.1  # 10% sampling
+  
+  # Provider-specific configuration
+  provider_configs:
+    openai:
+      track_token_timing: true
+    anthropic:
+      track_token_timing: true
+    google:
+      track_token_timing: false  # Disable for specific providers
+```
+
+#### End-to-End Testing
+
+The observability system includes comprehensive testing infrastructure:
+
+```bash
+# Run complete end-to-end tests with real observability backends
+cd tests/e2e/observability/
+export OPENAI_API_KEY="your-key"
+./run_test.sh
+
+# Services will be available at:
+# • Jaeger (Traces): http://localhost:16686
+# • Prometheus (Metrics): http://localhost:9090  
+# • Grafana (Dashboards): http://localhost:3000
+```
+
+#### Manual Observability Manager
+
+For advanced use cases:
+
+```python
+from arshai.observability import ObservabilityManager
+
+# Manual timing context
+obs_manager = ObservabilityManager(config)
+
+async with obs_manager.observe_streaming_llm_call("openai", "gpt-4", "custom_call") as timing:
+    # Your LLM interaction here
+    response = await your_llm_call()
+    
+    # Manual timing recording
+    timing.record_first_token()
+    timing.record_token()
+    
+    # Update with usage data from LLM response
+    await obs_manager.record_usage_data(timing, response['usage'])
+    
+    print(f"Time to first token: {timing.time_to_first_token:.3f}s")
+    print(f"Total tokens: {timing.total_tokens}")
+```
+
 ### Using Plugins
 
 Extend Arshai with custom plugins:
@@ -269,6 +446,268 @@ agent_config = IAgentConfig(
 )
 ```
 
+## Observability and Monitoring
+
+Arshai provides enterprise-grade observability for production AI systems with comprehensive OpenTelemetry integration and zero-fallback monitoring.
+
+### 🎯 Key Features
+
+- **Zero-Fallback Monitoring**: Always capture the 4 critical LLM metrics without any fallback mechanisms
+- **OpenTelemetry Native**: Export to any OTLP-compatible backend (Jaeger, Prometheus, Datadog, New Relic)
+- **LLM Usage Data Integration**: Accurate token counting from LLM response usage data
+- **Streaming Observability**: Real-time token-level timing for streaming responses
+- **Non-Intrusive Design**: Zero side effects on LLM calls with graceful degradation
+- **Production-Ready**: Comprehensive configuration, privacy controls, and performance optimization
+
+### 📊 The Four Key Metrics
+
+Every LLM interaction automatically captures these critical performance metrics:
+
+| Metric | Description | Use Case |
+|--------|-------------|----------|
+| `llm_time_to_first_token_seconds` | Latency from request start to first token | User experience, response time SLAs |
+| `llm_time_to_last_token_seconds` | Total response generation time | End-to-end performance monitoring |
+| `llm_duration_first_to_last_token_seconds` | Token generation duration | Throughput analysis, model performance |
+| `llm_completion_tokens` | Accurate completion token count | Cost tracking, usage monitoring |
+
+### 🏗️ Architecture
+
+```mermaid
+graph TD
+    A[LLM Calls] --> B[Observability Manager]
+    B --> C[Metrics Collector]
+    B --> D[Trace Exporter]
+    C --> E[OpenTelemetry Collector]
+    D --> E
+    E --> F[Jaeger/Zipkin]
+    E --> G[Prometheus]
+    E --> H[DataDog/New Relic]
+    G --> I[Grafana Dashboards]
+```
+
+### 🚀 Quick Setup
+
+#### 1. Basic Configuration
+
+```yaml
+# config.yaml
+observability:
+  service_name: "my-ai-service"
+  track_token_timing: true
+  otlp_endpoint: "http://localhost:4317"
+```
+
+#### 2. Factory Integration
+
+```python
+from src.factories.llm_factory import LLMFactory
+from arshai.observability import ObservabilityConfig
+
+config = ObservabilityConfig.from_yaml("config.yaml")
+client = LLMFactory.create_with_observability(
+    provider="openai",
+    config=llm_config,
+    observability_config=config
+)
+
+# All calls automatically instrumented
+response = client.chat_completion(input_data)
+```
+
+#### 3. Verify Data Collection
+
+```bash
+# Start observability stack
+cd tests/e2e/observability/
+docker-compose up -d
+
+# View metrics: http://localhost:9090
+# View traces: http://localhost:16686
+# View dashboards: http://localhost:3000
+```
+
+### 📈 Supported Backends
+
+#### Metrics Backends
+- **Prometheus** + Grafana
+- **DataDog** (via OTLP)
+- **New Relic** (via OTLP)
+- **AWS CloudWatch** (via OTLP)
+- **Azure Monitor** (via OTLP)
+- **Google Cloud Monitoring** (via OTLP)
+
+#### Tracing Backends
+- **Jaeger**
+- **Zipkin**
+- **DataDog APM**
+- **New Relic Distributed Tracing**
+- **AWS X-Ray**
+- **Azure Application Insights**
+
+### 🔧 Advanced Configuration
+
+#### Provider-Specific Settings
+
+```yaml
+observability:
+  provider_configs:
+    openai:
+      track_token_timing: true
+    anthropic:
+      track_token_timing: true
+    google:
+      track_token_timing: false  # Disable for specific providers
+```
+
+#### Privacy and Security
+
+```yaml
+observability:
+  # Privacy controls (recommended for production)
+  log_prompts: false
+  log_responses: false
+  max_prompt_length: 1000
+  max_response_length: 1000
+  
+  # Custom attributes (avoid sensitive data)
+  custom_attributes:
+    team: "ai-platform"
+    environment: "production"
+```
+
+#### Performance Tuning
+
+```yaml
+observability:
+  # High-throughput settings
+  metric_export_interval: 30
+  trace_sampling_rate: 0.05  # 5% sampling
+  max_span_attributes: 64
+  
+  # Async processing for better performance
+  non_intrusive: true
+```
+
+### 🧪 Testing and Development
+
+#### End-to-End Test Suite
+
+```bash
+# Complete observability testing with real backends
+cd tests/e2e/observability/
+export OPENAI_API_KEY="your-key"
+./run_test.sh
+
+# Tests verify:
+# ✅ All 4 key metrics collected
+# ✅ OTLP export working
+# ✅ Multiple provider support
+# ✅ Streaming observability
+# ✅ No side effects on LLM calls
+```
+
+#### Development Setup
+
+```yaml
+# Development configuration
+observability:
+  service_name: "arshai-dev"
+  environment: "development"
+  
+  # Debug settings
+  log_prompts: true
+  log_responses: true
+  trace_sampling_rate: 1.0  # 100% sampling
+  
+  # Local OTLP collector
+  otlp_endpoint: "http://localhost:4317"
+```
+
+### 📚 Production Deployment
+
+#### Docker Compose for Production
+
+The `tests/e2e/observability/docker-compose.yml` provides a production-ready template:
+
+```bash
+# Production observability stack
+docker-compose -f tests/e2e/observability/docker-compose.yml up -d
+
+# Includes:
+# - OpenTelemetry Collector
+# - Jaeger for distributed tracing
+# - Prometheus for metrics collection
+# - Grafana with pre-built dashboards
+```
+
+#### Kubernetes Deployment
+
+```yaml
+# Example Kubernetes configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: observability-config
+data:
+  config.yaml: |
+    observability:
+      service_name: "arshai-prod"
+      otlp_endpoint: "http://otel-collector:4317"
+      track_token_timing: true
+      log_prompts: false
+      log_responses: false
+```
+
+### 🔍 Monitoring and Alerting
+
+#### Key Metrics to Monitor
+
+```promql
+# Prometheus queries for monitoring
+# Average time to first token
+histogram_quantile(0.95, rate(llm_time_to_first_token_seconds_bucket[5m]))
+
+# Token throughput
+rate(llm_completion_tokens[5m])
+
+# Error rate
+rate(llm_requests_failed[5m]) / rate(llm_requests_total[5m])
+
+# Active requests
+llm_active_requests
+```
+
+#### Grafana Dashboard
+
+Pre-built dashboards available in `tests/e2e/observability/dashboards/`:
+- **LLM Performance**: Token timing metrics with percentiles
+- **Cost Tracking**: Token usage and provider distribution
+- **Error Monitoring**: Failed requests and error patterns
+- **Throughput Analysis**: Request rates and concurrent processing
+
+### 🔗 Integration Examples
+
+#### With Existing Monitoring
+
+```python
+# Custom metrics alongside Arshai observability
+from arshai.observability import ObservabilityManager
+from prometheus_client import Counter, Histogram
+
+# Your existing metrics
+business_requests = Counter('business_requests_total', 'Business requests')
+user_satisfaction = Histogram('user_satisfaction_score', 'User satisfaction')
+
+# Arshai observability (automatic LLM metrics)
+obs_config = ObservabilityConfig.from_yaml("config.yaml")
+client = LLMFactory.create_with_observability("openai", llm_config, obs_config)
+
+# Both systems work together
+business_requests.inc()
+response = client.chat_completion(input_data)  # LLM metrics automatic
+user_satisfaction.observe(calculate_satisfaction(response))
+```
+
 ## Examples
 
 Explore the `examples/` directory for complete working examples:
@@ -278,6 +717,8 @@ Explore the `examples/` directory for complete working examples:
 - `advanced_workflow.py`: Builds complex multi-agent workflows
 - `file_indexing_example.py`: Demonstrates document processing and indexing
 - `rag_system_usage.py`: Implements retrieval-augmented generation
+- `llm_observability_example.py`: Comprehensive observability system usage with real backends
+- `observability_usage_example.py`: Advanced observability patterns and custom metrics
 - `configuration.py`: Shows configuration management techniques
 
 ## Component Documentation
@@ -287,6 +728,7 @@ Each major component has its own detailed documentation:
 - [Agents System](src/agents/README.md)
 - [Memory Management](src/memory/README.md)
 - [LLM Integration](src/llms/README.md)
+- [Observability System](arshai/observability/README.md)
 - [Tools System](src/tools/README.md)
 - [Workflow System](src/workflows/README.md)
 
@@ -308,7 +750,7 @@ Arshai uses a flexible configuration system that can be customized through:
 Example configuration:
 
 ```yaml
-# config.yaml
+# config.yaml - Complete Arshai configuration
 llm:
   provider: openai
   model: gpt-4
@@ -318,6 +760,41 @@ memory:
   working_memory:
     provider: redis
     ttl: 86400
+
+# Comprehensive observability configuration
+observability:
+  # Service identification
+  service_name: "arshai-app"
+  service_version: "1.0.0"
+  environment: "production"
+  
+  # Core monitoring (always enabled)
+  trace_requests: true
+  collect_metrics: true
+  track_token_timing: true
+  
+  # OpenTelemetry export
+  otlp_endpoint: "http://localhost:4317"
+  otlp_timeout: 10
+  
+  # Privacy controls (recommended for production)
+  log_prompts: false
+  log_responses: false
+  max_prompt_length: 1000
+  max_response_length: 1000
+  
+  # Provider-specific settings
+  provider_configs:
+    openai:
+      track_token_timing: true
+    anthropic:
+      track_token_timing: true
+    google:
+      track_token_timing: false
+  
+  # Performance tuning
+  metric_export_interval: 60
+  trace_sampling_rate: 0.1
 
 workflows:
   debug_mode: true
