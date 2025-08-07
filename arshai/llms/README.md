@@ -997,4 +997,3 @@ Before submitting any LLM client implementation:
 - **[Technical Architecture](../../../docs/technical/llm_architecture.md)**: Understanding the overall framework design and architecture layers
 - **[Contributing Guide](../../../docs/contributing/llm_providers.md)**: Step-by-step provider implementation with code templates  
 - **[User Guide](../../../docs/guides/llm_usage.md)**: How framework users interact with your provider implementation
-- **[Architecture Decisions](../../../ARCHITECTURE_DECISIONS.md)**: Historical context and reasoning behind design decisions
