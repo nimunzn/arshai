@@ -9,7 +9,7 @@ import os
 import json
 import time
 import inspect
-from typing import Dict, Any, TypeVar, Type, Union, AsyncGenerator, List
+from typing import Dict, Any, TypeVar, Type, Union, AsyncGenerator, List, Callable
 import asyncio
 from openai import OpenAI
 
@@ -176,121 +176,97 @@ class OpenRouterClient(BaseLLMClient):
             {"role": "user", "content": input.user_message}
         ]
 
-    def _convert_functions_to_openai_format(self, functions: Union[List[Dict], Dict[str, Any]], is_background: bool = False) -> List[Dict]:
+    def _convert_callables_to_provider_format(self, functions: Dict[str, Callable]) -> List[Dict[str, Any]]:
         """
-        Unified method to convert functions to OpenAI format.
+        Convert python callables to OpenRouter-compatible function declarations.
+        Pure conversion without execution metadata.
         
         Args:
-            functions: Either list of tool schemas or dict of callable functions
-            is_background: Whether these are background tasks
-        
+            functions: Dictionary of callable functions to convert
+            
         Returns:
-            List of OpenAI-formatted function definitions
+            List of OpenAI-formatted function tools
         """
-        openai_functions = []
+        openai_tools = []
         
-        if isinstance(functions, list):
-            # Handle pre-defined tool schemas
-            for tool in functions:
-                # Ensure additionalProperties is False for strict mode
-                parameters = tool.get("parameters", {})
-                if isinstance(parameters, dict) and "additionalProperties" not in parameters:
-                    parameters["additionalProperties"] = False
-
-                openai_functions.append({
-                    "type": "function",
-                    "function": {
-                        "name": tool.get("name"),
-                        "description": tool.get("description", ""),
-                        "parameters": parameters
-                    }
-                })
-        
-        elif isinstance(functions, dict):
-            # Handle callable Python functions
-            for name, func in functions.items():
-                try:
-                    function_def = self._python_function_to_openai_function(func, name, is_background=is_background)
-                    openai_functions.append({
-                        "type": "function",
-                        "function": function_def
-                    })
-                except Exception as e:
-                    self.logger.warning(f"Failed to convert {'background task' if is_background else 'function'} {name}: {str(e)}")
-                    continue
-        
-        return openai_functions
-
-    def _python_function_to_openai_function(self, func, name: str, is_background: bool = False) -> Dict[str, Any]:
-        """Convert a Python function to OpenAI function format using introspection - matches old implementation."""
-        try:
-            # Get function signature
-            sig = inspect.signature(func)
-            
-            # Extract description from docstring
-            description = func.__doc__ or f"Execute {name} function"
-            description = description.strip()
-            
-            # Enhance description for background tasks
-            if is_background:
-                description = f"BACKGROUND TASK: {description}. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
-            
-            # Build parameters schema
-            properties = {}
-            required = []
-            
-            for param_name, param in sig.parameters.items():
-                # Skip 'self' parameter
-                if param_name == 'self':
-                    continue
+        # Convert callable functions (pure conversion, no execution metadata)
+        for name, func in functions.items():
+            try:
+                # Get function signature
+                sig = inspect.signature(func)
+                
+                # Extract description from docstring
+                description = func.__doc__ or f"Execute {name} function"
+                description = description.strip()
+                
+                # Build parameters schema
+                properties = {}
+                required = []
+                
+                for param_name, param in sig.parameters.items():
+                    # Skip 'self' parameter
+                    if param_name == 'self':
+                        continue
+                        
+                    # Get parameter type
+                    param_type = "string"  # default
+                    if param.annotation != inspect.Parameter.empty:
+                        param_type = self._python_type_to_json_schema_type(param.annotation)
                     
-                # Get parameter type
-                param_type = "string"  # default
-                if param.annotation != inspect.Parameter.empty:
-                    param_type = self._python_type_to_json_schema_type(param.annotation)
+                    # Build parameter definition
+                    param_def = {
+                        "type": param_type,
+                        "description": f"{param_name} parameter"
+                    }
+                    
+                    # Add to required if no default value
+                    if param.default == inspect.Parameter.empty:
+                        required.append(param_name)
+                    else:
+                        param_def["description"] += f" (default: {param.default})"
+                    
+                    properties[param_name] = param_def
                 
-                # Build parameter definition
-                param_def = {
-                    "type": param_type,
-                    "description": f"{param_name} parameter"
+                # Create function definition
+                function_def = {
+                    "name": name,
+                    "description": description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": properties,
+                        "required": required,
+                        "additionalProperties": False
+                    }
                 }
                 
-                # Add to required if no default value
-                if param.default == inspect.Parameter.empty:
-                    required.append(param_name)
-                else:
-                    param_def["description"] += f" (default: {param.default})"
+                # Add to tools list
+                openai_tools.append({
+                    "type": "function",
+                    "function": function_def
+                })
                 
-                properties[param_name] = param_def
-            
-            return {
-                "name": name,
-                "description": description,
-                "parameters": {
-                    "type": "object",
-                    "properties": properties,
-                    "required": required,
-                    "additionalProperties": False
-                }
-            }
-            
-        except Exception as e:
-            self.logger.warning(f"Failed to inspect function {name}: {str(e)}")
-            # Return basic fallback schema
-            description = f"Execute {name} function"
-            if is_background:
-                description = f"BACKGROUND TASK: {description}. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
-            
-            return {
-                "name": name,
-                "description": description,
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                    "required": [],
-                    "additionalProperties": False
-                }
-            }
+            except Exception as e:
+                self.logger.warning(f"Failed to inspect function {name}: {str(e)}")
+                # Return basic fallback schema
+                try:
+                    openai_tools.append({
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "description": f"Execute {name} function",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {},
+                                "required": [],
+                                "additionalProperties": False
+                            }
+                        }
+                    })
+                except Exception:
+                    # Skip this function entirely if even fallback fails
+                    continue
+        
+        return openai_tools
 
     def _python_type_to_json_schema_type(self, python_type) -> str:
         """Convert Python type annotations to JSON schema types."""
@@ -403,7 +379,7 @@ class OpenRouterClient(BaseLLMClient):
                     is_background=True
                 ))
             # Check if it's a regular function
-            elif function_name in (input.callable_functions or {}):
+            elif function_name in (input.regular_functions or {}):
                 function_calls.append(FunctionCall(
                     name=function_name,
                     args=function_args,
@@ -483,13 +459,15 @@ class OpenRouterClient(BaseLLMClient):
             function_name = input.structure_type.__name__.lower()
             messages[0]["content"] += STRUCTURE_INSTRUCTIONS_TEMPLATE.format(function_name=function_name)
         
-        # Add regular tools
-        if input.tools_list:
-            openai_tools.extend(self._convert_functions_to_openai_format(input.tools_list, is_background=False))
-        
-        # Add background tasks
+        # Convert all functions using the new unified approach
+        all_functions = {}
+        if input.regular_functions:
+            all_functions.update(input.regular_functions)
         if input.background_tasks:
-            openai_tools.extend(self._convert_functions_to_openai_format(input.background_tasks, is_background=True))
+            all_functions.update(input.background_tasks)
+        
+        if all_functions:
+            openai_tools.extend(self._convert_callables_to_provider_format(all_functions))
         
         # Multi-turn conversation for function calling
         current_turn = 0
@@ -541,7 +519,7 @@ class OpenRouterClient(BaseLLMClient):
                         # Create execution input
                         execution_input = FunctionExecutionInput(
                             function_calls=function_calls,
-                            available_functions=input.callable_functions or {},
+                            available_functions=input.regular_functions or {},
                             available_background_tasks=input.background_tasks or {}
                         )
                         
@@ -705,13 +683,15 @@ class OpenRouterClient(BaseLLMClient):
             function_name = input.structure_type.__name__.lower()
             messages[0]["content"] += STRUCTURE_INSTRUCTIONS_TEMPLATE.format(function_name=function_name)
         
-        # Add regular tools
-        if input.tools_list:
-            openai_tools.extend(self._convert_functions_to_openai_format(input.tools_list, is_background=False))
-        
-        # Add background tasks
+        # Convert all functions using the new unified approach
+        all_functions = {}
+        if input.regular_functions:
+            all_functions.update(input.regular_functions)
         if input.background_tasks:
-            openai_tools.extend(self._convert_functions_to_openai_format(input.background_tasks, is_background=True))
+            all_functions.update(input.background_tasks)
+        
+        if all_functions:
+            openai_tools.extend(self._convert_callables_to_provider_format(all_functions))
         
         # Multi-turn streaming conversation for function calling  
         current_turn = 0

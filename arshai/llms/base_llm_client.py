@@ -14,7 +14,7 @@ import logging
 import traceback
 import warnings
 from abc import ABC, abstractmethod
-from typing import Dict, Any, TypeVar, Union, AsyncGenerator, List, Type, Optional
+from typing import Dict, Any, TypeVar, Union, AsyncGenerator, List, Type, Optional, Callable
 
 from arshai.core.interfaces.illm import ILLM, ILLMConfig, ILLMInput
 from arshai.llms.utils.function_execution import FunctionOrchestrator, FunctionExecutionInput, FunctionCall, StreamingExecutionState
@@ -77,6 +77,23 @@ class BaseLLMClient(ILLM, ABC):
         pass
 
     @abstractmethod
+    def _convert_callables_to_provider_format(self, functions: Dict[str, Callable]) -> Any:
+        """
+        Convert python callables to provider-specific function declarations.
+        Pure conversion without execution metadata.
+        
+        Each provider must implement this to convert callables to their
+        specific format (OpenAI tools, Gemini FunctionDeclarations, etc.)
+        
+        Args:
+            functions: Dictionary of callable functions to convert
+            
+        Returns:
+            Provider-specific function declarations format
+        """
+        pass
+
+    @abstractmethod
     async def _chat_simple(self, input: ILLMInput) -> Dict[str, Any]:
         """
         Handle simple chat without tools or background tasks.
@@ -95,7 +112,7 @@ class BaseLLMClient(ILLM, ABC):
         Handle complex chat with tools and/or background tasks.
         
         Args:
-            input: LLM input with tools_list, callable_functions, background_tasks
+            input: LLM input with regular_functions, background_tasks
             
         Returns:
             Dict with 'llm_response' and 'usage' keys
@@ -121,7 +138,7 @@ class BaseLLMClient(ILLM, ABC):
         Handle complex streaming with tools and/or background tasks.
         
         Args:
-            input: LLM input with tools_list, callable_functions, background_tasks
+            input: LLM input with regular_functions, background_tasks
             
         Yields:
             Dict with 'llm_response' and optional 'usage' keys
@@ -142,11 +159,11 @@ class BaseLLMClient(ILLM, ABC):
             input: The LLM input to evaluate
             
         Returns:
-            True if function calling (tools or background tasks) is needed
+            True if function calling (regular functions or background tasks) is needed
         """
-        has_tools = input.tools_list and len(input.tools_list) > 0
+        has_regular_functions = input.regular_functions and len(input.regular_functions) > 0
         has_background_tasks = input.background_tasks and len(input.background_tasks) > 0
-        return has_tools or has_background_tasks
+        return has_regular_functions or has_background_tasks
 
     def _has_structured_output(self, input: ILLMInput) -> bool:
         """
@@ -296,7 +313,7 @@ class BaseLLMClient(ILLM, ABC):
             Dict containing 'llm_response' and 'usage' keys
         """
         try:
-            self.logger.info(f"Processing chat request - Tools: {bool(input.tools_list)}, "
+            self.logger.info(f"Processing chat request - Regular Functions: {bool(input.regular_functions)}, "
                            f"Background: {bool(input.background_tasks)}, "
                            f"Structured: {bool(input.structure_type)}")
 
@@ -328,7 +345,7 @@ class BaseLLMClient(ILLM, ABC):
             Dict containing 'llm_response' and optional 'usage' keys
         """
         try:
-            self.logger.info(f"Processing stream request - Tools: {bool(input.tools_list)}, "
+            self.logger.info(f"Processing stream request - Regular Functions: {bool(input.regular_functions)}, "
                            f"Background: {bool(input.background_tasks)}, "
                            f"Structured: {bool(input.structure_type)}")
 
@@ -531,7 +548,7 @@ class BaseLLMClient(ILLM, ABC):
         """
         return await self._function_orchestrator.execute_function_progressively(
             function_call,
-            input.callable_functions or {},
+            input.regular_functions or {},
             input.background_tasks or {}
         )
     

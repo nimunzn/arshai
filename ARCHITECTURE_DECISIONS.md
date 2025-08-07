@@ -445,3 +445,196 @@ def _add_failed_functions_to_context(self, failed_functions: List[Dict], content
 - **Error Pattern Detection**: Identify common function failure patterns for optimization
 
 This progressive streaming architecture represents a significant advancement in the framework's real-time capabilities, providing users with faster, more responsive AI interactions while maintaining the robustness and consistency of the existing architecture.
+
+## Unified Function Interface Architecture
+
+**Date**: 2025-01-16  
+**Scope**: Simplification and unification of function handling across all LLM clients
+
+### Problem Statement
+
+The original LLM interface had multiple ways to specify functions, creating complexity and inconsistency:
+
+**Original Interface Issues**:
+- `tools_list`: Pre-defined tool schemas (List[Dict])
+- `callable_functions`: Regular callable functions (Dict[str, Callable])  
+- `background_tasks`: Background callable functions (Dict[str, Callable])
+- Mixed types led to complex conversion logic and potential errors
+
+**Conversion Complexity**:
+- Providers needed to handle both tool schemas AND callables
+- Background task detection required `is_background` parameters
+- Function conversion methods were bloated with conditional logic
+
+### Architectural Decision: Pure Callable Interface
+
+**Decision**: Eliminate `tools_list` and `callable_functions`, unify under single callable approach
+
+**New Interface**:
+```python
+class ILLMInput(BaseModel):
+    regular_functions: Dict[str, Callable] = {}
+    background_tasks: Dict[str, Callable] = {}
+    # Removed: tools_list, callable_functions
+```
+
+**Key Principles**:
+1. **Single Source of Truth**: All functions are python callables
+2. **Upstream Conversion**: Tools convert to callables before reaching LLM clients
+3. **Pure Conversion**: LLM clients only do callable→provider format conversion
+4. **Explicit Background Declaration**: Background tasks declared in function docstrings
+
+### Implementation Strategy
+
+#### 1. Interface Simplification
+**Before**:
+```python
+# Complex mixed interface
+input = ILLMInput(
+    tools_list=[{"name": "search", "parameters": {...}}],  # Schema format
+    callable_functions={"calculate": calc_func},           # Callable format  
+    background_tasks={"notify": notify_func}               # Background callable
+)
+```
+
+**After**:
+```python
+# Clean unified interface
+input = ILLMInput(
+    regular_functions={"search": search_func, "calculate": calc_func},
+    background_tasks={"notify": notify_func}  # Explicit background designation
+)
+```
+
+#### 2. Function Declaration in Docstrings
+**Background Task Declaration**:
+```python
+def send_notification(event: str, details: str = "User interaction") -> None:
+    """BACKGROUND TASK: Send notification to admin channel. 
+    This task runs independently in fire-and-forget mode - no results 
+    will be returned to the conversation."""
+    pass
+```
+
+**Regular Function Declaration**:
+```python  
+def calculate_power(base: float, exponent: float) -> float:
+    """Calculate base raised to the power of exponent."""
+    return base ** exponent
+```
+
+#### 3. Provider Conversion Simplification
+
+**New Abstract Method in BaseLLMClient**:
+```python
+@abstractmethod
+def _convert_callables_to_provider_format(self, functions: Dict[str, Callable]) -> Any:
+    """
+    Convert python callables to provider-specific function declarations.
+    Pure conversion without execution metadata.
+    
+    Args:
+        functions: Dictionary of callable functions to convert
+        
+    Returns:
+        Provider-specific function declarations format
+    """
+    pass
+```
+
+**Client Implementation Pattern**:
+```python
+def _convert_callables_to_provider_format(self, functions: Dict[str, Callable]) -> List[Dict[str, Any]]:
+    """Convert callables to OpenAI format"""
+    tools = []
+    for name, func in functions.items():
+        # Pure conversion using introspection
+        sig = inspect.signature(func)
+        description = func.__doc__ or f"Execute {name} function"
+        
+        # Build provider-specific format
+        tools.append({
+            "type": "function", 
+            "function": {
+                "name": name,
+                "description": description,
+                "parameters": self._build_parameters_schema(sig)
+            }
+        })
+    return tools
+```
+
+#### 4. Usage Pattern in Clients
+**Function Preparation**:
+```python
+# Merge all functions for conversion
+all_functions = {}
+if input.regular_functions:
+    all_functions.update(input.regular_functions)
+if input.background_tasks:
+    all_functions.update(input.background_tasks)
+
+# Single conversion call
+if all_functions:
+    provider_tools = self._convert_callables_to_provider_format(all_functions)
+```
+
+**Execution Handling**:
+```python
+# Execution logic still distinguishes regular vs background
+if function_name in input.regular_functions:
+    # Execute as regular function
+    function_call = FunctionCall(name=function_name, args=args, is_background=False)
+elif function_name in input.background_tasks:
+    # Execute as background task
+    function_call = FunctionCall(name=function_name, args=args, is_background=True)
+```
+
+### Benefits of Unified Interface
+
+#### 1. Design Consistency
+- **Single Pattern**: One way to specify functions across the framework
+- **Clear Separation**: Regular vs background functions explicitly declared
+- **Type Safety**: All functions are Callable types with full IDE support
+
+#### 2. Implementation Simplification
+- **Reduced Complexity**: No more mixed type handling in providers
+- **Cleaner Code**: Conversion methods focus only on callable→provider format
+- **Easier Maintenance**: Single pattern to test and debug
+
+#### 3. Better Architecture
+- **Separation of Concerns**: Tool→callable conversion happens upstream
+- **Pure Functions**: Provider conversion methods have single responsibility
+- **Framework Consistency**: Same patterns across all LLM clients
+
+#### 4. Developer Experience
+- **Clear Intent**: Background tasks explicitly declared in docstrings
+- **Better Debugging**: Function signatures and docs available at runtime
+- **Consistent Testing**: Single pattern for all function testing
+
+### Migration Impact
+
+#### 1. Interface Changes
+- ✅ **ILLMInput**: Updated to unified callable interface
+- ✅ **BaseLLMClient**: Added abstract conversion method  
+- ✅ **OpenRouterClient**: Migrated to new pattern
+- 🔄 **Other Clients**: Gemini, Azure, OpenAI pending migration
+
+#### 2. Test Updates
+- ✅ **Function Definitions**: Updated background tasks with proper docstrings
+- ✅ **Test Cases**: Migrated from `tools_list`/`callable_functions` to `regular_functions`
+- ✅ **Pattern Validation**: Tests verify unified interface behavior
+
+#### 3. Backward Compatibility
+- **Framework Level**: Tool objects convert to callables before reaching LLM clients
+- **Client Level**: Only new unified interface supported in migrated clients
+- **Migration Path**: Upstream conversion handles legacy tool formats
+
+### Implementation Status
+
+- ✅ **Phase 1**: Interface design and BaseLLMClient abstract method
+- ✅ **Phase 2**: OpenRouterClient migration and testing
+- 🔄 **Phase 3**: Remaining client migrations (Gemini, Azure, OpenAI)
+- **Phase 4**: Performance testing and optimization
+
+This unified function interface represents a significant simplification of the Arshai LLM architecture, eliminating complexity while improving consistency and maintainability across all providers.

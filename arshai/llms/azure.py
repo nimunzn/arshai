@@ -9,7 +9,7 @@ import os
 import json
 import time
 import inspect
-from typing import Dict, Any, TypeVar, Type, Union, AsyncGenerator, List
+from typing import Dict, Any, TypeVar, Type, Union, AsyncGenerator, List, Callable
 from openai import AzureOpenAI
 from openai.types.responses import ParsedResponse
 
@@ -174,52 +174,32 @@ class AzureClient(BaseLLMClient):
             response_input.append(response_message)
         return response_input
 
-    def _convert_functions_to_azure_format(self, functions: Union[List[Dict], Dict[str, Any]], is_background: bool = False) -> List[Dict]:
+    def _convert_callables_to_provider_format(self, functions: Dict[str, Callable]) -> List[Dict]:
         """
-        Unified method to convert functions to Azure format.
+        Convert python callables to Azure function format.
+        Pure conversion without execution metadata.
         
         Args:
-            functions: Either list of tool schemas or dict of callable functions
-            is_background: Whether these are background tasks
+            functions: Dictionary of callable functions to convert
         
         Returns:
             List of Azure-formatted function definitions
         """
         azure_functions = []
         
-        if isinstance(functions, list):
-            # Handle pre-defined tool schemas
-            for tool in functions:
-                # Get tool properties
-                description = tool.get("description", "")
+        # Handle callable Python functions
+        for name, func in functions.items():
+            try:
+                # Check if it's a background task by docstring
+                original_description = func.__doc__ or f"Execute {name} function"
+                is_background_task = original_description.startswith("BACKGROUND TASK:")
                 
-                # Enhance description for background tasks
-                if is_background:
-                    description = f"BACKGROUND TASK: {description}. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
-                
-                # Ensure additionalProperties is False for strict mode
-                parameters = tool.get("parameters", {})
-                if isinstance(parameters, dict) and "additionalProperties" not in parameters:
-                    parameters["additionalProperties"] = False
-
-                azure_functions.append({
-                    "type": "function",
-                    "name": tool.get("name"),
-                    "description": description,
-                    "parameters": parameters,
-                    "strict": True  # Required for structured output
-                })
-        
-        elif isinstance(functions, dict):
-            # Handle callable Python functions
-            for name, func in functions.items():
-                try:
-                    function_def = self._python_function_to_azure_function(func, name, is_background=is_background)
-                    function_def["type"] = "function"  # Add type to create flat structure
-                    azure_functions.append(function_def)
-                except Exception as e:
-                    self.logger.warning(f"Failed to convert {'background task' if is_background else 'function'} {name}: {str(e)}")
-                    continue
+                function_def = self._python_function_to_azure_function(func, name, is_background=is_background_task)
+                function_def["type"] = "function"  # Add type to create flat structure
+                azure_functions.append(function_def)
+            except Exception as e:
+                self.logger.warning(f"Failed to convert function {name}: {str(e)}")
+                continue
         
         return azure_functions
 
@@ -229,13 +209,9 @@ class AzureClient(BaseLLMClient):
             # Get function signature
             sig = inspect.signature(func)
             
-            # Extract description from docstring
+            # Extract description from docstring (keeping original for background tasks)
             description = func.__doc__ or f"Execute {name} function"
             description = description.strip()
-            
-            # Enhance description for background tasks
-            if is_background:
-                description = f"BACKGROUND TASK: {description}. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
             
             # Build parameters schema
             properties = {}
@@ -281,9 +257,7 @@ class AzureClient(BaseLLMClient):
         except Exception as e:
             self.logger.warning(f"Failed to inspect function {name}: {str(e)}")
             # Return basic fallback schema
-            description = f"Execute {name} function"
-            if is_background:
-                description = f"BACKGROUND TASK: {description}. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
+            description = func.__doc__ or f"Execute {name} function"
             
             return {
                 "name": name,
@@ -352,7 +326,7 @@ class AzureClient(BaseLLMClient):
                     is_background=True
                 ))
             # Check if it's a regular function
-            elif function_name in (input.callable_functions or {}):
+            elif function_name in (input.regular_functions or {}):
                 function_calls_list.append(FunctionCall(
                     name=function_name,
                     args=function_args,
@@ -459,13 +433,15 @@ class AzureClient(BaseLLMClient):
         # Prepare tools for Azure
         azure_tools = []
         
-        # Add regular tools
-        if input.tools_list:
-            azure_tools.extend(self._convert_functions_to_azure_format(input.tools_list, is_background=False))
-        
-        # Add background tasks
+        # Convert all functions using the new unified approach
+        all_functions = {}
+        if input.regular_functions:
+            all_functions.update(input.regular_functions)
         if input.background_tasks:
-            azure_tools.extend(self._convert_functions_to_azure_format(input.background_tasks, is_background=True))
+            all_functions.update(input.background_tasks)
+        
+        if all_functions:
+            azure_tools.extend(self._convert_callables_to_provider_format(all_functions))
         
         # Convert to Azure ResponseInputParam format
         response_input = self._convert_messages_to_response_input(messages)
@@ -524,7 +500,7 @@ class AzureClient(BaseLLMClient):
                         # Create execution input
                         execution_input = FunctionExecutionInput(
                             function_calls=function_calls_list,
-                            available_functions=input.callable_functions or {},
+                            available_functions=input.regular_functions or {},
                             available_background_tasks=input.background_tasks or {}
                         )
                         
@@ -647,13 +623,15 @@ class AzureClient(BaseLLMClient):
         # Prepare tools for Azure
         azure_tools = []
         
-        # Add regular tools
-        if input.tools_list:
-            azure_tools.extend(self._convert_functions_to_azure_format(input.tools_list, is_background=False))
-        
-        # Add background tasks
+        # Convert all functions using the new unified approach
+        all_functions = {}
+        if input.regular_functions:
+            all_functions.update(input.regular_functions)
         if input.background_tasks:
-            azure_tools.extend(self._convert_functions_to_azure_format(input.background_tasks, is_background=True))
+            all_functions.update(input.background_tasks)
+        
+        if all_functions:
+            azure_tools.extend(self._convert_callables_to_provider_format(all_functions))
         
         # Convert to Azure ResponseInputParam format
         response_input = self._convert_messages_to_response_input(messages)

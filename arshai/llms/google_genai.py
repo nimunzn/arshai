@@ -8,7 +8,7 @@ implementation as mentioned in CLAUDE.md.
 
 import os
 import time
-from typing import Dict, Any, TypeVar, Type, Union, AsyncGenerator, List
+from typing import Dict, Any, TypeVar, Type, Union, AsyncGenerator, List, Callable
 from google.oauth2 import service_account
 import google.genai as genai
 from google.genai.types import (
@@ -239,81 +239,54 @@ class GeminiClient(BaseLLMClient):
         """Build base conversation context from system prompt and user message."""
         return f"{input.system_prompt}\n\nUser: {input.user_message}"
 
-    def _convert_functions_to_gemini_format(self, functions: Union[List[Dict], Dict[str, Any]], is_background: bool = False) -> List[FunctionDeclaration]:
+    def _convert_callables_to_provider_format(self, functions: Dict[str, Callable]) -> List[FunctionDeclaration]:
         """
-        Unified method to convert functions to Gemini format.
+        Convert python callables to Gemini FunctionDeclaration format.
+        Pure conversion without execution metadata.
         
         Args:
-            functions: Either list of tool schemas or dict of callable functions
-            is_background: Whether these are background tasks
+            functions: Dictionary of callable functions to convert
         
         Returns:
             List of Gemini FunctionDeclaration objects
         """
         gemini_declarations = []
         
-        if isinstance(functions, list):
-            # Handle pre-defined tool schemas
-            for tool in functions:
-                description = tool.get("description", "")
-                
-                # Enhance description for background tasks
-                if is_background:
-                    description = f"BACKGROUND TASK: {description}. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
-                
-                gemini_declarations.append(
-                    FunctionDeclaration(
-                        name=tool.get("name"),
-                        description=description,
-                        parameters=tool.get("parameters", {}),
-                    )
+        # Handle callable Python functions
+        for name, callable_func in functions.items():
+            try:
+                # Use Gemini SDK's auto-generation from callable
+                declaration = FunctionDeclaration.from_callable(
+                    callable=callable_func, 
+                    client=self._client
                 )
                 
-        elif isinstance(functions, dict):
-            # Handle callable Python functions
-            for name, callable_func in functions.items():
-                try:
-                    # Use Gemini SDK's auto-generation from callable
-                    declaration = FunctionDeclaration.from_callable(
-                        callable=callable_func, 
-                        client=self._client
-                    )
-                    
-                    # Get original description
-                    original_description = declaration.description or callable_func.__doc__ or name
-                    
-                    # Enhance description for background tasks
-                    if is_background:
-                        enhanced_description = f"BACKGROUND TASK: {original_description}. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
-                    else:
-                        enhanced_description = original_description
-                    
-                    # Create enhanced declaration
-                    enhanced_declaration = FunctionDeclaration(
-                        name=declaration.name,
-                        description=enhanced_description,
-                        parameters=declaration.parameters
-                    )
-                    
-                    gemini_declarations.append(enhanced_declaration)
-                    self.logger.debug(f"Auto-generated declaration for {'background task' if is_background else 'function'}: {name}")
-                    
-                except Exception as e:
-                    self.logger.warning(f"Failed to auto-generate declaration for {'background task' if is_background else 'function'} {name}: {str(e)}")
-                    # Fallback: create basic declaration
-                    original_description = callable_func.__doc__ or name
-                    if is_background:
-                        enhanced_description = f"BACKGROUND TASK: {original_description}. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."
-                    else:
-                        enhanced_description = original_description
+                # Get original description and check if it's a background task
+                original_description = declaration.description or callable_func.__doc__ or name
+                is_background_task = original_description.startswith("BACKGROUND TASK:")
+                
+                # Create enhanced declaration (keeping original description for background tasks)
+                enhanced_declaration = FunctionDeclaration(
+                    name=declaration.name,
+                    description=original_description,
+                    parameters=declaration.parameters
+                )
+                
+                gemini_declarations.append(enhanced_declaration)
+                self.logger.debug(f"Auto-generated declaration for {'background task' if is_background_task else 'function'}: {name}")
+                
+            except Exception as e:
+                self.logger.warning(f"Failed to auto-generate declaration for function {name}: {str(e)}")
+                # Fallback: create basic declaration
+                original_description = callable_func.__doc__ or name
                         
-                    gemini_declarations.append(
-                        FunctionDeclaration(
-                            name=name,
-                            description=enhanced_description,
-                            parameters={"type": "object", "properties": {}, "required": []},
-                        )
+                gemini_declarations.append(
+                    FunctionDeclaration(
+                        name=name,
+                        description=original_description,
+                        parameters={"type": "object", "properties": {}, "required": []},
                     )
+                )
         
         return gemini_declarations
 
@@ -385,7 +358,7 @@ class GeminiClient(BaseLLMClient):
                     is_background=True
                 ))
             # Check if it's a regular function
-            elif function_name in (input.callable_functions or {}):
+            elif function_name in (input.regular_functions or {}):
                 function_calls_list.append(FunctionCall(
                     name=function_name,
                     args=function_args,
@@ -492,13 +465,17 @@ class GeminiClient(BaseLLMClient):
         # Prepare tools for Gemini
         gemini_tools = []
         
-        # Add regular tools
-        if input.tools_list:
-            gemini_tools.extend(self._convert_functions_to_gemini_format(input.tools_list, is_background=False))
-        
-        # Add background tasks
+        # Convert all functions using the new unified approach
+        all_functions = {}
+        if input.regular_functions:
+            all_functions.update(input.regular_functions)
         if input.background_tasks:
-            gemini_tools.extend(self._convert_functions_to_gemini_format(input.background_tasks, is_background=True))
+            all_functions.update(input.background_tasks)
+        
+        if all_functions:
+            gemini_tools.extend(self._convert_callables_to_provider_format(all_functions))
+        
+        # Note: Background tasks are now included in the unified conversion above
         
         # Multi-turn conversation for function calling
         current_turn = 0
@@ -545,7 +522,7 @@ class GeminiClient(BaseLLMClient):
                         # Create execution input
                         execution_input = FunctionExecutionInput(
                             function_calls=function_calls_list,
-                            available_functions=input.callable_functions or {},
+                            available_functions=input.regular_functions or {},
                             available_background_tasks=input.background_tasks or {}
                         )
                         
@@ -651,13 +628,17 @@ class GeminiClient(BaseLLMClient):
         # Prepare tools for Gemini
         gemini_tools = []
         
-        # Add regular tools
-        if input.tools_list:
-            gemini_tools.extend(self._convert_functions_to_gemini_format(input.tools_list, is_background=False))
-        
-        # Add background tasks
+        # Convert all functions using the new unified approach
+        all_functions = {}
+        if input.regular_functions:
+            all_functions.update(input.regular_functions)
         if input.background_tasks:
-            gemini_tools.extend(self._convert_functions_to_gemini_format(input.background_tasks, is_background=True))
+            all_functions.update(input.background_tasks)
+        
+        if all_functions:
+            gemini_tools.extend(self._convert_callables_to_provider_format(all_functions))
+        
+        # Note: Background tasks are now included in the unified conversion above
         
         # Multi-turn streaming conversation for function calling  
         current_turn = 0
@@ -716,7 +697,7 @@ class GeminiClient(BaseLLMClient):
                     
                     # Handle function calls with progressive execution
                     if hasattr(chunk, "function_calls") and chunk.function_calls:
-                        for i, func_call in enumerate(chunk.function_calls):
+                        for func_call in chunk.function_calls:
                             # For Gemini, function calls arrive complete in chunks
                             # Track them in progress similar to OpenRouter pattern
                             call_index = len(tool_calls_in_progress)
