@@ -12,10 +12,10 @@ A comprehensive, non-intrusive observability layer for the Arshai LLM framework.
 
 ### Advanced Features
 - **Non-Intrusive Design**: Zero side effects on LLM calls
+- **Constructor-Based Integration**: Clean, direct integration via client constructors
 - **Automatic Provider Detection**: Works with OpenAI, Azure, Anthropic, Google Gemini
 - **YAML Configuration Support**: Configure via `config.yaml` as per Arshai patterns
-- **Factory Integration**: Seamless integration with `LLMFactory`
-- **Token Counting**: Pre-call token estimation using provider-specific libraries
+- **Token Counting**: Accurate token counting from LLM responses
 - **Streaming Support**: Token-level timing for streaming responses
 - **OpenTelemetry Compatible**: Full OTLP export support
 
@@ -24,11 +24,12 @@ A comprehensive, non-intrusive observability layer for the Arshai LLM framework.
 ```
 arshai/observability/
 ├── __init__.py                 # Main exports
-├── config.py                   # YAML configuration support
+├── config.py                   # Configuration support
 ├── core.py                     # ObservabilityManager
 ├── metrics.py                  # MetricsCollector with key metrics
-├── factory_integration.py     # LLMFactory integration
-├── decorators.py               # Non-intrusive decorators
+├── decorators.py               # DEPRECATED - decorator approach
+├── factory_integration.py     # DEPRECATED - factory approach
+├── helpers.py                  # DEPRECATED - helper functions
 └── README.md                   # This file
 ```
 
@@ -44,450 +45,322 @@ pip install opentelemetry-exporter-otlp-proto-grpc
 
 ## ⚡ Quick Start
 
-### 1. YAML Configuration (Recommended)
-
-Create `config.yaml`:
-
-```yaml
-# config.yaml
-llm:
-  provider: openai
-  model: gpt-4
-  temperature: 0.7
-
-observability:
-  track_token_timing: true
-  service_name: "my-arshai-app"
-  environment: "production"
-  
-  # Privacy controls
-  log_prompts: false
-  log_responses: false
-  
-  # Optional: OTLP export
-  # otlp_endpoint: "http://localhost:4317"
-```
-
-### 2. Basic Usage with Factory
+### Simple Setup (Recommended)
 
 ```python
+from arshai.llms.openai import OpenAIClient
 from arshai.core.interfaces.illm import ILLMConfig, ILLMInput
-from src.factories.llm_factory import LLMFactory
+from arshai.observability import ObservabilityManager, ObservabilityConfig
 
-# Configure LLM
-llm_config = ILLMConfig(model="gpt-3.5-turbo", temperature=0.7)
-
-# Create with automatic observability
-client = LLMFactory.create_with_observability(
-    provider="openai",
-    config=llm_config,
-    config_path="config.yaml"  # Optional
+# 1. Create LLM configuration
+llm_config = ILLMConfig(
+    model="gpt-4",
+    temperature=0.7,
+    max_tokens=1000
 )
 
-# Use normally - observability is automatic!
-input_data = ILLMInput(
+# 2. Create observability configuration
+obs_config = ObservabilityConfig(
+    service_name="my-ai-app",
+    track_token_timing=True,
+    collect_metrics=True,
+    log_prompts=False  # For privacy
+)
+
+# 3. Create observability manager
+obs_manager = ObservabilityManager(obs_config)
+
+# 4. Create client with observability
+client = OpenAIClient(llm_config, observability_manager=obs_manager)
+
+# 5. Use normally - observability is automatic!
+response = await client.chat(ILLMInput(
     system_prompt="You are a helpful assistant.",
-    user_message="What is machine learning?"
-)
+    user_message="Explain machine learning briefly."
+))
 
-response = client.chat_completion(input_data)
-print(response['llm_response'])
+# Metrics are automatically collected:
+# ✅ llm_time_to_first_token_seconds
+# ✅ llm_time_to_last_token_seconds  
+# ✅ llm_duration_first_to_last_token_seconds
+# ✅ llm_completion_tokens
 ```
 
-### 3. Environment Variables
-
-```bash
-export ARSHAI_TRACK_TOKEN_TIMING=true
-export ARSHAI_SERVICE_NAME=my-app
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
-```
-
-## 📊 Metrics Reference
-
-### Request Metrics
-- `llm_requests_total`: Total number of LLM requests
-- `llm_requests_failed`: Total number of failed requests
-- `llm_active_requests`: Number of currently active requests
-- `llm_request_duration_seconds`: Total request duration histogram
-
-### Token Metrics (Core Features)
-- **`llm_time_to_first_token_seconds`**: Time from start to first token ⭐
-- **`llm_time_to_last_token_seconds`**: Time from start to last token ⭐
-- **`llm_duration_first_to_last_token_seconds`**: Duration between tokens ⭐
-- **`llm_completion_tokens`**: Count of completion tokens ⭐
-- `llm_prompt_tokens`: Count of prompt tokens
-- `llm_tokens_total`: Total token count
-- `llm_tokens_per_second`: Token generation throughput
-
-### Span Attributes
-- `llm.provider`: LLM provider name
-- `llm.model`: Model name
-- `llm.time_to_first_token`: Time to first token (seconds)
-- `llm.time_to_last_token`: Time to last token (seconds)
-- `llm.duration_first_to_last_token`: Duration between tokens (seconds)
-- `llm.usage.prompt_tokens`: Prompt token count
-- `llm.usage.completion_tokens`: Completion token count
-- `llm.usage.total_tokens`: Total token count
-
-## 🏭 Factory Integration
-
-### Automatic Observability
+### Multi-Provider Support
 
 ```python
-from src.factories.llm_factory import LLMFactory
+from arshai.llms.azure import AzureClient
+from arshai.llms.google_genai import GeminiClient
+from arshai.llms.openrouter import OpenRouterClient
 
-# Method 1: Direct creation with observability
-client = LLMFactory.create_with_observability(
-    provider="openai",
-    config=llm_config,
-    config_path="config.yaml"
+# Same observability manager works with all providers
+obs_manager = ObservabilityManager(obs_config)
+
+# OpenAI
+openai_client = OpenAIClient(config, observability_manager=obs_manager)
+
+# Azure (with required parameters)
+azure_client = AzureClient(
+    config, 
+    observability_manager=obs_manager,
+    azure_deployment="my-deployment",
+    api_version="2024-02-01"
 )
 
-# Method 2: Get observable factory
-observable_factory = LLMFactory.get_observable_factory(
-    config_path="config.yaml"
-)
-client = observable_factory.create("openai", llm_config)
+# Gemini
+gemini_client = GeminiClient(config, observability_manager=obs_manager)
+
+# OpenRouter  
+openrouter_client = OpenRouterClient(config, observability_manager=obs_manager)
+
+# All clients automatically collect the same metrics!
 ```
 
-### Provider Support
+### Streaming Support
 
-The factory automatically detects and supports:
+```python
+# Streaming automatically includes token timing
+async for chunk in client.stream(input_data):
+    if chunk.get('llm_response'):
+        print(chunk['llm_response'], end='', flush=True)
+    
+    # Final chunk contains usage metrics with timing data
+    if chunk.get('usage'):
+        usage = chunk['usage']
+        print(f"\n📊 Tokens: {usage['total_tokens']}")
+        print(f"⏱️  First token: {usage.get('time_to_first_token', 'N/A')}ms")
+```
 
-- **OpenAI**: Uses usage data from API responses
-- **Azure OpenAI**: Uses usage data from API responses
-- **Anthropic Claude**: Uses usage data from API responses
-- **Google Gemini**: Uses usage data from API responses
-- **OpenRouter**: Uses usage data from API responses
+## 🛠️ Configuration
 
-## 🔧 Configuration Options
+### YAML Configuration
 
-### Complete Configuration
+Create `observability.yaml`:
 
 ```yaml
 observability:
-  # Basic controls
-  trace_requests: true
-  collect_metrics: true
-  
-  # Service identification
-  service_name: "arshai-llm"
-  service_version: "1.0.0"
-  environment: "production"
-  
-  # Key feature: Token timing
+  service_name: "my-ai-application"
   track_token_timing: true
+  collect_metrics: true
+  log_prompts: false
   
-  # Privacy controls
-  log_prompts: false      # Never enable in production
-  log_responses: false    # Never enable in production
-  max_prompt_length: 1000
-  max_response_length: 1000
-  
-  # OpenTelemetry export
+  # OpenTelemetry settings
   otlp_endpoint: "http://localhost:4317"
   otlp_headers:
-    Authorization: "Bearer token"
-  otlp_timeout: 10
+    api-key: "your-jaeger-key"
   
-  # Non-intrusive mode (recommended)
-  non_intrusive: true
-  
-  # Provider-specific settings
-  provider_configs:
-    openai:
-      track_token_timing: true
-    anthropic:
-      track_token_timing: true
-    google:
-      track_token_timing: false
-  
-  # Custom attributes
-  custom_attributes:
-    team: "ai-platform"
-    component: "llm-client"
+  # Advanced settings
+  enable_tracing: true
+  enable_metrics: true
+  max_prompt_length: 1000
+  max_response_length: 5000
+```
+
+Load from YAML:
+```python
+from arshai.observability import ObservabilityConfig
+
+obs_config = ObservabilityConfig.from_yaml("observability.yaml")
+obs_manager = ObservabilityManager(obs_config)
+client = OpenAIClient(config, observability_manager=obs_manager)
 ```
 
 ### Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `ARSHAI_TRACK_TOKEN_TIMING` | Enable token timing | `true` |
-| `ARSHAI_SERVICE_NAME` | Service name | `arshai-llm` |
-| `ARSHAI_NON_INTRUSIVE` | Non-intrusive mode | `true` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint | None |
-| `OTEL_SERVICE_NAME` | Service name (OTEL) | None |
+```bash
+export ARSHAI_SERVICE_NAME="my-ai-app"
+export ARSHAI_OTLP_ENDPOINT="http://localhost:4317"
+export ARSHAI_TRACK_TOKEN_TIMING="true"
+export ARSHAI_COLLECT_METRICS="true"
+```
 
-## 🎯 Non-Intrusive Design
-
-The observability system is designed to have **zero side effects** on LLM calls:
-
-### No Modification of Original Behavior
 ```python
-# Original LLM client behavior is preserved
+# Auto-loads from environment
+obs_config = ObservabilityConfig.from_env()
+```
+
+## 📊 Metrics & Monitoring
+
+### Key Metrics Collected
+
+| Metric | Description | Unit |
+|--------|-------------|------|
+| `llm_time_to_first_token_seconds` | Latency from request to first token | seconds |
+| `llm_time_to_last_token_seconds` | Total response generation time | seconds |  
+| `llm_duration_first_to_last_token_seconds` | Token generation duration | seconds |
+| `llm_completion_tokens` | Number of completion tokens | count |
+
+### Labels Added
+- `provider`: LLM provider (openai, azure, gemini, etc.)
+- `model`: Model name (gpt-4, gpt-3.5-turbo, etc.)  
+- `service_name`: Your application name
+
+### Jaeger/OpenTelemetry Integration
+
+```python
+# Observability data is automatically exported to your OTLP endpoint
+obs_config = ObservabilityConfig(
+    service_name="my-app",
+    otlp_endpoint="http://jaeger:4317",
+    enable_tracing=True,
+    enable_metrics=True
+)
+```
+
+View in Jaeger UI at `http://localhost:16686`
+
+## 🔄 Migration from Old Approaches
+
+### From Factory-Based Approach
+
+**❌ Old (Deprecated):**
+```python
+from src.factories.llm_factory import LLMFactory
+
+client = LLMFactory.create_with_observability(
+    provider="openai",
+    config=llm_config,
+    observability_config=obs_config
+)
+```
+
+**✅ New (Recommended):**
+```python
+from arshai.llms.openai import OpenAIClient
+
+obs_manager = ObservabilityManager(obs_config)
+client = OpenAIClient(llm_config, observability_manager=obs_manager)
+```
+
+### From Helper Functions
+
+**❌ Old (Deprecated):**
+```python  
+from arshai.observability import create_observable_openai_client
+
+client = create_observable_openai_client(config, obs_config)
+```
+
+**✅ New (Recommended):**
+```python
+from arshai.llms.openai import OpenAIClient
+from arshai.observability import ObservabilityManager
+
+obs_manager = ObservabilityManager(obs_config)
+client = OpenAIClient(config, observability_manager=obs_manager)
+```
+
+### Method Names
+
+**❌ Old:**
+```python
 response = client.chat_completion(input_data)
-# Response format and content unchanged
-
-# Observability data is collected separately
-# No additional latency or API calls
+async for chunk in client.stream_completion(input_data):
 ```
 
-### Wrapper-Based Architecture
+**✅ New:**
 ```python
-# Non-intrusive wrapper preserves original instance
-class ObservableWrapper:
-    def __init__(self, wrapped_instance, provider_name, obs_manager):
-        self._wrapped = wrapped_instance  # Original instance
-        # Observability is added as a layer
+response = await client.chat(input_data)
+async for chunk in client.stream(input_data):
 ```
 
-### Graceful Degradation
-```python
-# If observability fails, LLM calls continue normally
-try:
-    # Collect metrics
-    with observability_manager.observe_llm_call(...) as timing:
-        result = original_llm_method(...)
-        return result
-except Exception:
-    # Observability error doesn't affect LLM call
-    return original_llm_method(...)
-```
+## 🎯 Benefits of Constructor Approach
 
-## 🔄 Streaming Support
+1. **Cleaner Code**: Direct constructor usage, no decorators or factory wrappers
+2. **Better IDE Support**: Full type hints and autocomplete
+3. **Easier Testing**: Simple mocking and dependency injection
+4. **Explicit Dependencies**: Clear what each client needs
+5. **Less Magic**: No hidden behavior, everything is explicit
 
-The system provides comprehensive streaming observability with usage data extraction:
+## 📈 Production Usage
 
-### Automatic Streaming Observability
-```python
-async def example_streaming():
-    async for chunk in client.stream_completion(input_data):
-        # Each chunk is automatically timed
-        # First token timing recorded automatically
-        # Last token timing recorded automatically
-        
-        if chunk.get('usage'):
-            # Final usage data includes timing metrics
-            pass
-```
-
-### Manual Async Streaming Observability
-```python
-async def manual_streaming_example():
-    obs_manager = ObservabilityManager(config)
-    
-    # Async context manager for better performance
-    async with obs_manager.observe_streaming_llm_call("openai", "gpt-4", "streaming") as timing:
-        async for chunk in client.stream_completion(input_data):
-            # Process each chunk asynchronously for better performance
-            usage_data = await obs_manager.process_streaming_chunk(chunk, timing)
-            
-            if chunk.get('llm_response'):
-                content = chunk['llm_response']
-                # Content is automatically counted and timed with async methods
-            
-            # Final chunk contains complete usage information
-            if usage_data:
-                print(f"Tokens: {usage_data['total_tokens']}")
-                print(f"Time to first token: {timing.time_to_first_token}s")
-                print(f"Generation duration: {timing.duration_first_to_last_token}s")
-                break
-```
-
-### Concurrent Request Performance
-```python
-async def concurrent_llm_requests():
-    """Example showing async performance benefits."""
-    
-    # Multiple concurrent requests with observability
-    tasks = []
-    for i in range(10):
-        task = client.chat_completion(input_data)
-        tasks.append(task)
-    
-    # All requests run concurrently with async observability
-    results = await asyncio.gather(*tasks)
-    
-    # Each request is individually tracked with full metrics
-    # Much faster than sequential requests!
-```
-
-### Streaming Usage Data
-
-The system supports provider-specific streaming usage data extraction:
-
-#### OpenAI/Azure Streaming
-- **Usage extraction**: Automatically extracts final usage data from last chunk
-- **Chunk format**: Handles OpenAI's `choices[0].delta.content` format
-- **Real-time timing**: Tracks token timing without custom counting
-
-#### Anthropic Streaming  
-- **Event-based**: Extracts usage from `message_stop` events
-- **Usage mapping**: Maps `input_tokens`/`output_tokens` to standard format
-- **Stream timing**: Records timing for each content chunk
-
-#### Google Gemini Streaming
-- **Content-based**: Extracts usage data from streaming responses
-- **Stream timing**: Real-time timing tracking for content chunks
-
-#### OpenRouter Streaming
-- **API-compatible**: Uses OpenAI-compatible streaming format
-- **Usage data**: Extracts final usage from stream completion
-
-### Streaming Metrics
-- **Time to first token**: Measured when first content chunk arrives
-- **Time to last token**: Measured when final content chunk arrives  
-- **Duration**: Calculated between first and last token timestamps
-- **Usage data**: Final token counts extracted from LLM response
-- **Chunk-level timing**: Each chunk timestamp recorded for analysis
-
-## 🛠 Advanced Usage
-
-### Manual Observability Manager
-
-```python
-from arshai.observability import ObservabilityManager, ObservabilityConfig
-
-# Create manager
-config = ObservabilityConfig.from_yaml("config.yaml")
-manager = ObservabilityManager(config)
-
-# Manual timing
-with manager.observe_llm_call("openai", "gpt-4", "custom_call") as timing:
-    # Your LLM call here
-    result = make_llm_call()
-    
-    # Manual token counting
-    timing.update_token_counts(prompt_tokens=10, completion_tokens=20)
-    timing.record_token()
-    
-    return result
-```
-
-### Pre-Call Token Counting
-
-```python
-# Count tokens before making API call
-messages = [
-    {"role": "system", "content": "You are helpful."},
-    {"role": "user", "content": "Hello!"}
-]
-
-token_info = manager.pre_call_token_count("openai", "gpt-4", messages)
-print(f"Estimated tokens: {token_info['prompt_tokens']}")
-```
-
-### Custom Decorators
-
-```python
-from arshai.observability.decorators import with_observability
-
-@with_observability("custom_provider")
-def my_llm_method(self, input_data):
-    # Your custom LLM implementation
-    return {"llm_response": "...", "usage": usage_data}
-```
-
-## 📈 Deployment
-
-### Development Setup
+### Docker Compose with Jaeger
 
 ```yaml
-observability:
-  log_prompts: true    # OK for development
-  log_responses: true  # OK for development
-  # No OTLP endpoint - uses console exporters
+# docker-compose.yml
+version: '3.8'
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "4317:4317"    # OTLP gRPC receiver
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      
+  my-app:
+    build: .
+    environment:
+      - ARSHAI_OTLP_ENDPOINT=http://jaeger:4317
+      - ARSHAI_SERVICE_NAME=my-ai-app
+    depends_on:
+      - jaeger
 ```
 
-### Production Setup
+### Kubernetes ConfigMap
 
 ```yaml
-observability:
-  service_name: "production-llm-service"
-  environment: "production"
-  
-  # Privacy first
-  log_prompts: false
-  log_responses: false
-  
-  # Export to observability backend
-  otlp_endpoint: "https://your-otel-collector.com"
-  otlp_headers:
-    Authorization: "Bearer your-production-token"
-  
-  # Performance tuning
-  trace_sampling_rate: 0.1  # Sample 10% of traces
-  metric_export_interval: 30
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: observability-config
+data:
+  observability.yaml: |
+    observability:
+      service_name: "ai-service"
+      track_token_timing: true
+      collect_metrics: true
+      otlp_endpoint: "http://jaeger-collector:4317"
 ```
 
-### Popular Backends
+## 🧪 Testing
 
-Works with any OpenTelemetry-compatible backend:
+```python
+# Easy to test - just mock the observability manager
+from unittest.mock import Mock
 
-- **Jaeger**: Distributed tracing
-- **Prometheus + Grafana**: Metrics and visualization
-- **Datadog**: Full observability platform
-- **New Relic**: APM and monitoring
-- **OpenTelemetry Collector**: Data pipeline hub
+mock_obs_manager = Mock()
+client = OpenAIClient(config, observability_manager=mock_obs_manager)
 
-## 🐛 Troubleshooting
+# Or test without observability
+client = OpenAIClient(config)  # No observability - works fine!
+```
+
+## 🔍 Troubleshooting
 
 ### Common Issues
 
-1. **No metrics appearing**
-   - Check `collect_metrics=true` in config
-   - Verify OTLP endpoint configuration
-   - Ensure OpenTelemetry dependencies installed
+1. **Missing Metrics**: Ensure OpenTelemetry dependencies are installed
+2. **No Traces**: Check OTLP endpoint is reachable
+3. **Performance Impact**: Observability has minimal overhead when properly configured
 
-2. **Token metrics not showing**
-   - Check `track_token_timing=true` in config
-   - Verify LLM responses include usage data (`prompt_tokens`, `completion_tokens`, `total_tokens`)
-   - Ensure provider is supported (OpenAI, Azure, Anthropic, Google)
-
-3. **High memory usage**
-   - Reduce `max_span_attributes` in config
-   - Lower `trace_sampling_rate`
-   - Use `non_intrusive=true` mode
-
-### Debug Logging
+### Debug Mode
 
 ```python
-import logging
-logging.getLogger("arshai.observability").setLevel(logging.DEBUG)
+obs_config = ObservabilityConfig(
+    service_name="debug-app",
+    log_level="DEBUG"  # Enable debug logging
+)
 ```
 
-### Validation
+## 📚 Advanced Usage
 
-```python
-from arshai.observability import ObservabilityManager, ObservabilityConfig
+### Custom Metrics
 
-config = ObservabilityConfig.from_yaml("config.yaml")
-manager = ObservabilityManager(config)
+```python  
+# Add custom metrics alongside Arshai observability
+from opentelemetry import metrics
 
-print(f"Observability enabled: {manager.is_enabled()}")
-print(f"Token timing enabled: {manager.is_token_timing_enabled('openai')}")
+meter = metrics.get_meter(__name__)
+custom_counter = meter.create_counter("my_custom_metric")
+
+# Use with Arshai observability
+obs_manager = ObservabilityManager(obs_config)
+client = OpenAIClient(config, observability_manager=obs_manager)
+
+# Both systems work together
+custom_counter.add(1, {"operation": "chat_request"})
+response = await client.chat(input_data)
 ```
 
-## 📚 Examples
-
-See `examples/observability_usage_example.py` for comprehensive examples including:
-
-- YAML configuration loading
-- Factory integration
-- Streaming observability
-- Manual timing collection
-- Token counting examples
-- Error handling patterns
-
-## 🤝 Contributing
-
-To extend the observability system:
-
-1. **Add new providers**: Implement `BaseTokenCounter` for new LLM providers
-2. **Add metrics**: Extend `MetricsCollector` with new measurements
-3. **Add exporters**: Create new OpenTelemetry exporter integrations
-4. **Add configuration**: Extend `ObservabilityConfig` with new options
-
-## 📄 License
-
-This observability system is part of the Arshai framework and follows the project's licensing terms.
+The constructor-based approach is simple, clean, and production-ready! 🚀

@@ -1,4 +1,31 @@
-"""Non-intrusive decorators for LLM observability."""
+"""
+DEPRECATED: Non-intrusive decorators for LLM observability.
+
+⚠️  DEPRECATION WARNING ⚠️
+
+This decorator-based approach is DEPRECATED and will be removed in a future version.
+
+The new constructor-based approach is much simpler and cleaner:
+
+    from arshai.llms.openai import OpenAIClient
+    from arshai.observability import ObservabilityManager, ObservabilityConfig
+    
+    # Create observability manager
+    obs_config = ObservabilityConfig(service_name="my-app")
+    obs_manager = ObservabilityManager(obs_config)
+    
+    # Use client constructor directly - no decorators needed!
+    client = OpenAIClient(config, observability_manager=obs_manager)
+
+This is cleaner, more direct, and eliminates the complexity of decorators.
+
+MIGRATION PATH:
+- Replace @with_observability decorators with constructor parameters
+- Replace ObservabilityMixin inheritance with constructor parameters
+- Use client constructors directly instead of decorated classes
+
+This module will be removed in the next major version.
+"""
 
 import functools
 import asyncio

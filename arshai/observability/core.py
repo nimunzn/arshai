@@ -103,13 +103,13 @@ class ObservabilityManager:
         """Check if token timing is enabled for a specific provider."""
         return self.config.is_token_timing_enabled(provider)
     
-    @contextmanager
-    def observe_llm_call(self, 
+    @asynccontextmanager
+    async def observe_llm_call(self, 
                         provider: str, 
                         model: str, 
                         method_name: str = "llm_call",
                         **extra_attributes):
-        """Non-intrusive context manager for observing LLM calls.
+        """Non-intrusive async context manager for observing LLM calls.
         
         Args:
             provider: LLM provider name
