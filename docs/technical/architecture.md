@@ -600,8 +600,8 @@ The Observability System provides comprehensive monitoring and instrumentation f
 classDiagram
     class IObservabilityManager {
         <<interface>>
-        +observe_llm_call(provider, model, method) ContextManager
-        +observe_streaming_llm_call(provider, model, method) AsyncContextManager
+        +observe_llm_call(provider, model, method) AsyncContextManager
+        +record_usage_data(timing_data, usage) None
         +pre_call_token_count(provider, model, messages) TokenCountResult
         +process_streaming_chunk(provider, model, chunk, timing) UsageData
     }
@@ -611,8 +611,8 @@ classDiagram
         -metrics_collector: MetricsCollector
         -tracer: Tracer
         -token_counter_factory: TokenCounterFactory
-        +observe_llm_call(provider, model, method) ContextManager
-        +observe_streaming_llm_call(provider, model, method) AsyncContextManager
+        +observe_llm_call(provider, model, method) AsyncContextManager
+        +record_usage_data(timing_data, usage) None
         +pre_call_token_count(provider, model, messages) TokenCountResult
         +process_streaming_chunk(provider, model, chunk, timing) UsageData
     }
@@ -671,21 +671,33 @@ The system provides four core metrics for LLM performance monitoring:
 
 #### Integration Patterns
 
-The observability system integrates seamlessly with the existing architecture:
+The observability system integrates seamlessly with the LLM architecture through constructor-based injection:
 
 ```python
-# Factory Integration
-client = LLMFactory.create_with_observability(
-    provider="openai",
-    config=llm_config,
-    observability_config=obs_config
-)
+# Constructor-based Integration (Recommended)
+from arshai.llms.openai import OpenAIClient
+from arshai.observability import ObservabilityManager, ObservabilityConfig
 
-# Manual Integration
-with obs_manager.observe_llm_call("openai", "gpt-4") as timing:
-    response = llm_client.chat_completion(input_data)
-    # Metrics automatically collected
+# Configure observability
+obs_config = ObservabilityConfig(
+    service_name="my-ai-service",
+    track_token_timing=True,
+    metrics_enabled=True
+)
+obs_manager = ObservabilityManager(obs_config)
+
+# Pass to any LLM client constructor
+client = OpenAIClient(config, observability_manager=obs_manager)
+
+# Use client normally - observability is automatic
+response = await client.chat(input_data)
 ```
+
+The BaseLLMClient framework handles all observability integration automatically:
+- Provider name is auto-detected from class name
+- Usage data is collected from standardized responses
+- Metrics are recorded for both chat and stream methods
+- No additional code needed in provider implementations
 
 ### Future Directions
 Planned architectural enhancements include:
