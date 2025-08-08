@@ -6,19 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Testing
 ```bash
-pytest                    # Run all tests
-pytest tests/unit/        # Run unit tests only
-pytest tests/integration/ # Run integration tests only
-pytest --cov=arshai      # Run tests with coverage
+poetry run pytest                    # Run all tests
+poetry run pytest tests/unit/        # Run unit tests only
+poetry run pytest tests/integration/ # Run integration tests only
+poetry run pytest --cov=arshai      # Run tests with coverage
 ```
 
 ### Code Quality
 ```bash
-black .                  # Format code
-isort .                  # Sort imports
-mypy arshai/             # Type checking
-bandit -r arshai/        # Security analysis
-safety check             # Check dependencies for vulnerabilities
+poetry run black .                  # Format code
+poetry run isort .                  # Sort imports
+poetry run mypy arshai/             # Type checking
+poetry run bandit -r arshai/        # Security analysis
+poetry run safety check             # Check dependencies for vulnerabilities
 ```
 
 ### Documentation

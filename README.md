@@ -35,7 +35,7 @@ Arshai is designed to empower developers to build sophisticated AI applications 
 - **Workflow Orchestration**: Design complex multi-agent systems with directed graph workflows
 - **Memory Management**: Implement sophisticated conversation memory with multiple storage options
 - **Tool Integration**: Extend agent capabilities with custom tools and external integrations
-- **LLM Integration**: Connect with leading LLM providers (OpenAI, Azure OpenAI, Anthropic, Google Gemini) with consistent APIs
+- **LLM Integration**: Connect with leading LLM providers (OpenAI, Azure OpenAI, Google Gemini, OpenRouter) with progressive streaming, unified function interface, and comprehensive architecture documentation
 - **Observability System**: Comprehensive monitoring and instrumentation for LLM interactions with OpenTelemetry support
 - **RAG Capabilities**: Build powerful retrieval-augmented generation systems with document processing
 - **Structured Outputs**: Enforce structured responses with schema validation
@@ -115,14 +115,28 @@ Extends agent capabilities with specific functionalities:
 
 #### LLM Integration
 
-Connects to large language models through a unified interface:
-- **OpenAI Provider**: Integration with OpenAI models
-- **Azure Provider**: Integration with Azure OpenAI service
-- **Anthropic Provider**: Integration with Claude models
-- **Google Provider**: Integration with Gemini models
-- **OpenRouter Provider**: Access to multiple models through OpenRouter
-- **Streaming Support**: Real-time response generation
-- **Function Calling**: Tool integration through function definitions
+Connects to large language models through a unified, production-ready architecture:
+
+**Providers & Capabilities:**
+- **OpenAI Provider**: Direct API integration with delta streaming
+- **Azure Provider**: Enterprise deployment with native structured parsing  
+- **Google Gemini Provider**: Native SDK integration with dual authentication
+- **OpenRouter Provider**: HTTP proxy access to multiple models with safe connection handling
+- **Anthropic Provider**: Integration with Claude models (via OpenRouter)
+
+**Advanced Architecture Features:**
+- **Progressive Streaming**: Real-time function execution during streaming for optimal performance
+- **Unified Function Interface**: Consistent callable-based approach across all providers
+- **Background Tasks**: Fire-and-forget execution for logging, notifications, and analytics
+- **Multi-Turn Conversations**: Intelligent conversation management with context preservation
+- **Error Resilience**: Graceful handling of function failures with context for model recovery
+- **Usage Tracking**: Standardized token usage monitoring across all providers
+
+**Framework Benefits:**
+- **Behavioral Consistency**: All providers implement identical interfaces
+- **Easy Extension**: Add new providers with minimal code (5 abstract methods)
+- **Production Ready**: Comprehensive error handling, usage tracking, and observability
+- **Developer Experience**: Clear patterns, extensive documentation, and troubleshooting guides
 
 #### Observability System
 
@@ -260,37 +274,42 @@ result = workflow_runner.run({
 print(result.get("response", ""))
 ```
 
-### Using Tools
+### Using Tools with LLM Direct Integration
 
-Extend agents with tool capabilities:
+Extend functionality with the unified function interface:
 
 ```python
-from arshai import Settings, IAgentConfig, IAgentInput
-from arshai.tools.web_search_tool import WebSearchTool
+from arshai.llms.openai import OpenAIClient
+from arshai.core.interfaces.illm import ILLMConfig, ILLMInput
 
-# Initialize settings
-settings = Settings()
+# Initialize LLM client
+config = ILLMConfig(model="gpt-4o", temperature=0.7)
+client = OpenAIClient(config)
 
-# Create tools
-web_search = WebSearchTool(settings)
+# Define functions that can be called by the LLM
+def get_weather(location: str) -> str:
+    """Get current weather for a location."""
+    return f"Weather in {location}: 22°C, sunny"
 
-# Create agent with tools
-agent_config = IAgentConfig(
-    task_context="You are a research assistant that can search the web for information.",
-    tools=[web_search]
+def log_interaction(action: str, user_id: str = "anonymous") -> None:
+    """BACKGROUND TASK: Log user interaction for analytics.
+    This runs independently without affecting the conversation."""
+    print(f"📊 Logged: {action} by {user_id}")
+
+# LLM with unified function interface
+input_data = ILLMInput(
+    system_prompt="You are a helpful assistant with access to weather data.",
+    user_message="What's the weather like in Tokyo? Also please log this request.",
+    regular_functions={"get_weather": get_weather},      # Returns results to conversation
+    background_tasks={"log_interaction": log_interaction} # Fire-and-forget execution
 )
 
-agent = settings.create_agent("conversation", agent_config)
+# Progressive streaming with real-time function execution
+async for chunk in client.stream(input_data):
+    if chunk.get("llm_response"):
+        print(chunk["llm_response"], end="", flush=True)
 
-# Process a message that might trigger tool usage
-response, usage = agent.process_message(
-    IAgentInput(
-        message="What are the latest breakthroughs in fusion energy?",
-        conversation_id="research_123"
-    )
-)
-
-print(f"Agent response with web search: {response}")
+# Functions execute immediately during streaming, not after completion
 ```
 
 ### Observability and Monitoring
@@ -721,16 +740,34 @@ Explore the `examples/` directory for complete working examples:
 - `observability_usage_example.py`: Advanced observability patterns and custom metrics
 - `configuration.py`: Shows configuration management techniques
 
+### **📖 LLM Architecture Examples**
+
+See the comprehensive LLM documentation for detailed examples:
+- **Progressive streaming** with real-time function execution
+- **Background tasks** for logging and notifications  
+- **Multi-provider implementations** with consistent interfaces
+- **Error handling patterns** and troubleshooting guides
+- **Performance optimization** techniques
+
 ## Component Documentation
 
 Each major component has its own detailed documentation:
 
 - [Agents System](src/agents/README.md)
 - [Memory Management](src/memory/README.md)
-- [LLM Integration](src/llms/README.md)
+- [LLM Integration](arshai/llms/README.md) - **Comprehensive implementation guide with critical notes**
 - [Observability System](arshai/observability/README.md)
 - [Tools System](src/tools/README.md)
 - [Workflow System](src/workflows/README.md)
+
+### **📚 Complete LLM Documentation**
+
+For comprehensive understanding of the LLM architecture:
+
+- **[Technical Architecture](docs/technical/llm_architecture.md)**: Complete architectural overview with design decisions and rationale
+- **[User Guide](docs/guides/llm_usage.md)**: Practical examples and usage patterns for all providers
+- **[Contributing Guide](docs/contributing/llm_providers.md)**: Step-by-step implementation guide for new providers
+- **[Implementation README](arshai/llms/README.md)**: Critical implementation notes and troubleshooting
 
 ## Real-World Applications
 
