@@ -38,10 +38,7 @@ class ILLMInput(IDTO):
         if not data.get('user_message'):
             raise ValueError("user_message is required")
         
-        # Function calling requirements
-        has_functions = bool(data.get('regular_functions')) or bool(data.get('background_tasks'))
-        if data.get('structure_type') and not has_functions:
-            raise ValueError("structure_type requires at least one function to be defined")
+        # No additional validation needed - structured output works independently
         
         return data
 
