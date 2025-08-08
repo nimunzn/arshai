@@ -19,6 +19,11 @@ from typing import Dict, Any, TypeVar, Union, AsyncGenerator, List, Type, Option
 from arshai.core.interfaces.illm import ILLM, ILLMConfig, ILLMInput
 from arshai.llms.utils.function_execution import FunctionOrchestrator, FunctionExecutionInput, FunctionCall, StreamingExecutionState
 
+# Type checking imports for observability
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from arshai.observability import ObservabilityManager
+
 T = TypeVar("T")
 
 
@@ -44,20 +49,24 @@ class BaseLLMClient(ILLM, ABC):
     - Provider-specific format conversions
     """
 
-    def __init__(self, config: ILLMConfig):
+    def __init__(self, config: ILLMConfig, observability_manager: Optional['ObservabilityManager'] = None):
         """
         Initialize the base LLM client with framework infrastructure.
         
         Args:
             config: LLM configuration
+            observability_manager: Optional observability manager for metrics collection
         """
         self.config = config
+        self.observability_manager = observability_manager
         self.logger = logging.getLogger(self.__class__.__name__)
 
         # Framework infrastructure
         self._function_orchestrator = FunctionOrchestrator()
 
         self.logger.info(f"Initializing {self.__class__.__name__} with model: {self.config.model}")
+        if observability_manager:
+            self.logger.info(f"Observability enabled for {self._get_provider_name()}")
 
         # Initialize the provider-specific client
         self._client = self._initialize_client()
@@ -304,8 +313,31 @@ class BaseLLMClient(ILLM, ABC):
         Process a chat message with optional tools, background tasks, and structured output.
         
         This is the main chat method that handles all cases. Framework handles
-        routing to appropriate provider-specific methods.
+        routing to appropriate provider-specific methods and observability integration.
 
+        Args:
+            input: The LLM input containing system prompt, user message, tools, and options
+
+        Returns:
+            Dict containing 'llm_response' and 'usage' keys
+        """
+        if self.observability_manager:
+            async with self.observability_manager.observe_llm_call(
+                self._get_provider_name(),
+                self.config.model,
+                "chat"
+            ) as timing_data:
+                result = await self._execute_chat(input)
+                if 'usage' in result:
+                    await self.observability_manager.record_usage_data(timing_data, result['usage'])
+                return result
+        else:
+            return await self._execute_chat(input)
+
+    async def _execute_chat(self, input: ILLMInput) -> Dict[str, Any]:
+        """
+        Execute chat logic without observability (current chat() implementation).
+        
         Args:
             input: The LLM input containing system prompt, user message, tools, and options
 
@@ -336,8 +368,31 @@ class BaseLLMClient(ILLM, ABC):
         Process a streaming chat message with optional tools, background tasks, and structured output.
         
         This is the main streaming method that handles all cases. Framework handles
-        routing to appropriate provider-specific methods.
+        routing to appropriate provider-specific methods and observability integration.
 
+        Args:
+            input: The LLM input containing system prompt, user message, tools, and options
+
+        Yields:
+            Dict containing 'llm_response' and optional 'usage' keys
+        """
+        if self.observability_manager:
+            async with self.observability_manager.observe_streaming_llm_call(
+                self._get_provider_name(),
+                self.config.model,
+                "stream"
+            ) as timing_data:
+                async for chunk in self._execute_stream(input):
+                    await self.observability_manager.process_streaming_chunk(chunk, timing_data)
+                    yield chunk
+        else:
+            async for chunk in self._execute_stream(input):
+                yield chunk
+
+    async def _execute_stream(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Execute streaming logic without observability (current stream() implementation).
+        
         Args:
             input: The LLM input containing system prompt, user message, tools, and options
 

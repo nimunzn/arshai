@@ -40,7 +40,7 @@ class AzureClient(BaseLLMClient):
     BaseLLMClient framework with Azure-specific optimizations.
     """
     
-    def __init__(self, config: ILLMConfig, azure_deployment: str = None, api_version: str = None):
+    def __init__(self, config: ILLMConfig, azure_deployment: str = None, api_version: str = None, observability_manager=None):
         """
         Initialize the Azure OpenAI client.
         
@@ -48,6 +48,7 @@ class AzureClient(BaseLLMClient):
             config: Configuration for the LLM
             azure_deployment: Optional deployment name (if not provided, will be read from env)
             api_version: Optional API version (if not provided, will be read from env)
+            observability_manager: Optional observability manager for metrics collection
         """
         # Azure-specific configuration
         self.azure_deployment = azure_deployment or os.environ.get("AZURE_DEPLOYMENT")
@@ -59,8 +60,8 @@ class AzureClient(BaseLLMClient):
         if not self.api_version:
             raise ValueError("Azure API version is required. Set AZURE_API_VERSION environment variable.")
         
-        # Initialize base client (handles common setup)
-        super().__init__(config)
+        # Initialize base client (handles common setup including observability)
+        super().__init__(config, observability_manager=observability_manager)
     
     def _initialize_client(self) -> Any:
         """
