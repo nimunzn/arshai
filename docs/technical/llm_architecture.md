@@ -119,6 +119,11 @@ The `BaseLLMClient` serves as the foundation for all LLM provider implementation
 class BaseLLMClient(ILLM, ABC):
     """Framework-standardized base class for all LLM clients."""
     
+    def __init__(self, config: ILLMConfig, observability_manager: Optional['ObservabilityManager'] = None):
+        """Initialize with optional observability support."""
+        self.config = config
+        self.observability_manager = observability_manager
+    
     # Public Interface (what applications call)
     async def chat(self, input: ILLMInput) -> Dict[str, Any]
     async def stream(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]
@@ -452,6 +457,91 @@ flowchart LR
 - **Context Integration**: Error information added to conversation for model awareness
 - **Progressive Resilience**: Failed functions during streaming don't break the stream
 - **Usage Preservation**: Token usage always tracked regardless of execution outcome
+
+## Observability Integration
+
+### Constructor-Based Approach
+
+The LLM architecture supports optional observability through constructor parameters:
+
+```python
+from arshai.llms.openai import OpenAIClient
+from arshai.observability import ObservabilityManager, ObservabilityConfig
+
+# Create observability manager
+obs_config = ObservabilityConfig(
+    service_name="my-app",
+    track_token_timing=True,
+    metrics_enabled=True
+)
+obs_manager = ObservabilityManager(obs_config)
+
+# Pass to any LLM client constructor
+client = OpenAIClient(config, observability_manager=obs_manager)
+
+# Use client normally - observability is automatic
+response = await client.chat(input)
+```
+
+### Framework-Level Integration
+
+**Key Design Decisions:**
+- **Zero Provider Impact**: Observability handled entirely in BaseLLMClient
+- **Automatic Provider Detection**: Framework detects provider from class name
+- **Non-Invasive**: Optional parameter doesn't affect existing code
+- **Consistent Metrics**: Same metrics collected across all providers
+
+### Metrics Collected
+
+When observability is enabled, the framework automatically tracks:
+
+```python
+{
+    "llm_call_duration_ms": 1234.5,        # Total call duration
+    "input_tokens": 120,                    # Prompt tokens
+    "output_tokens": 80,                    # Response tokens
+    "total_tokens": 200,                    # Total token usage
+    "provider": "openai",                   # Auto-detected provider
+    "model": "gpt-4o",                     # Model from config
+    "method": "chat",                       # chat or stream
+    "status": "success",                    # success or error
+    "error": null                          # Error message if failed
+}
+```
+
+### Production Deployment
+
+```python
+# Production configuration with full observability
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.grpc import OTLPSpanExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+# Configure OpenTelemetry
+trace.set_tracer_provider(TracerProvider())
+tracer_provider = trace.get_tracer_provider()
+
+# Add OTLP exporter for production
+otlp_exporter = OTLPSpanExporter(
+    endpoint="your-otel-collector:4317",
+    insecure=True
+)
+span_processor = BatchSpanProcessor(otlp_exporter)
+tracer_provider.add_span_processor(span_processor)
+
+# Create observability manager
+obs_config = ObservabilityConfig(
+    service_name="production-ai-service",
+    track_token_timing=True,
+    metrics_enabled=True,
+    trace_enabled=True
+)
+obs_manager = ObservabilityManager(obs_config)
+
+# Use with any LLM client
+client = AzureClient(config, observability_manager=obs_manager)
+```
 
 ## Multi-Turn Conversation Management
 

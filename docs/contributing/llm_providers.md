@@ -98,13 +98,13 @@ class YourProviderClient(BaseLLMClient):
     following Arshai's standardized patterns and progressive streaming.
     """
     
-    def __init__(self, config: ILLMConfig, **provider_specific_args):
-        """Initialize with provider-specific configuration."""
+    def __init__(self, config: ILLMConfig, observability_manager=None, **provider_specific_args):
+        """Initialize with provider-specific configuration and optional observability."""
         # Store provider-specific configuration
         self.provider_arg = provider_specific_args.get('provider_arg')
         
-        # Initialize base class (this calls _initialize_client())
-        super().__init__(config)
+        # Initialize base class with observability support (this calls _initialize_client())
+        super().__init__(config, observability_manager=observability_manager)
 ```
 
 ### 2. Implementation Flow Overview
@@ -611,6 +611,46 @@ if not API_KEY:
 3. **Implement progressive streaming** - Execute functions immediately during streaming
 4. **Handle errors gracefully** - Provide informative error messages and preserve usage data
 5. **Test thoroughly** - Ensure your implementation passes all framework test scenarios
+
+## Observability Support
+
+### Framework-Level Integration
+
+The BaseLLMClient framework automatically supports observability through constructor parameters. Your provider implementation gets this for free:
+
+```python
+# Users can enable observability for your provider
+from arshai.observability import ObservabilityManager, ObservabilityConfig
+
+obs_config = ObservabilityConfig(service_name="my-app")
+obs_manager = ObservabilityManager(obs_config)
+
+# Your provider automatically supports this
+client = YourProviderClient(config, observability_manager=obs_manager)
+```
+
+### What Gets Tracked
+
+The framework automatically tracks:
+- **Duration**: Total call time for chat/stream operations
+- **Token Usage**: From your standardized usage metadata
+- **Provider Name**: Auto-detected from class name
+- **Method**: Whether chat or stream was called
+- **Errors**: Any exceptions during execution
+
+### Implementation Requirements
+
+To ensure observability works correctly:
+
+1. **Accept observability_manager parameter**: Pass it to super().__init__()
+2. **Return standardized usage**: Always use `_standardize_usage_metadata()`
+3. **Preserve usage on errors**: Return usage even when operations fail
+
+```python
+def __init__(self, config: ILLMConfig, observability_manager=None, **kwargs):
+    # Your initialization
+    super().__init__(config, observability_manager=observability_manager)
+```
 
 ## Support and Resources
 

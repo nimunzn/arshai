@@ -357,6 +357,77 @@ except Exception as e:
     # Handle error appropriately
 ```
 
+## Observability and Monitoring
+
+### Basic Observability Setup
+
+Add observability to any LLM client with the constructor parameter:
+
+```python
+from arshai.llms.openai import OpenAIClient
+from arshai.observability import ObservabilityManager, ObservabilityConfig
+
+# Configure observability
+obs_config = ObservabilityConfig(
+    service_name="my-ai-application",
+    track_token_timing=True,
+    metrics_enabled=True
+)
+obs_manager = ObservabilityManager(obs_config)
+
+# Pass to client constructor
+config = ILLMConfig(model="gpt-4o", temperature=0.7)
+client = OpenAIClient(config, observability_manager=obs_manager)
+
+# Use client normally - metrics are automatically collected
+response = await client.chat(input_data)
+```
+
+### Production Monitoring
+
+For production environments with OpenTelemetry:
+
+```python
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.grpc import OTLPSpanExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+# Configure OpenTelemetry
+trace.set_tracer_provider(TracerProvider())
+tracer_provider = trace.get_tracer_provider()
+
+# Add OTLP exporter
+otlp_exporter = OTLPSpanExporter(
+    endpoint="your-otel-collector:4317",
+    insecure=True
+)
+span_processor = BatchSpanProcessor(otlp_exporter)
+tracer_provider.add_span_processor(span_processor)
+
+# Create observability manager
+obs_config = ObservabilityConfig(
+    service_name="production-ai-service",
+    track_token_timing=True,
+    metrics_enabled=True,
+    trace_enabled=True
+)
+obs_manager = ObservabilityManager(obs_config)
+
+# Use with any client
+client = AzureClient(config, observability_manager=obs_manager)
+```
+
+### Metrics Collected
+
+Observability automatically tracks:
+- **Duration**: Total call time in milliseconds
+- **Token Usage**: Input, output, and total tokens
+- **Provider & Model**: Auto-detected from client
+- **Method**: Whether chat or stream was used
+- **Status**: Success or error with details
+- **Function Calls**: Number and types of functions executed
+
 ## Usage Tracking
 
 All LLM calls return standardized usage information:
