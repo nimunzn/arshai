@@ -47,9 +47,13 @@ class GeminiClient(BaseLLMClient):
     and demonstrates best practices for the new BaseLLMClient framework.
     """
     
-    def __init__(self, config: ILLMConfig):
+    def __init__(self, config: ILLMConfig, observability_manager=None):
         """
         Initialize the Gemini client with configuration.
+
+        Args:
+            config: Configuration for the LLM
+            observability_manager: Optional observability manager for metrics collection
 
         Supports dual authentication methods:
         1. API Key (simpler): Set GOOGLE_API_KEY environment variable
@@ -63,8 +67,8 @@ class GeminiClient(BaseLLMClient):
         self.location = os.getenv("VERTEX_AI_LOCATION")
         self.model_config = getattr(config, "config", {})
 
-        # Initialize base client (handles common setup)
-        super().__init__(config)
+        # Initialize base client (handles common setup including observability)
+        super().__init__(config, observability_manager=observability_manager)
     
     def _initialize_client(self) -> Any:
         """
