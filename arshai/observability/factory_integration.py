@@ -1,4 +1,31 @@
-"""Integration with LLM factory for automatic observability."""
+"""
+DEPRECATED: Integration with LLM factory for automatic observability.
+
+⚠️  DEPRECATION WARNING ⚠️
+
+This factory-based approach is DEPRECATED and will be removed in a future version.
+
+The new constructor-based approach is much simpler and cleaner:
+
+    from arshai.llms.openai import OpenAIClient
+    from arshai.observability import ObservabilityManager, ObservabilityConfig
+    
+    # Create observability manager
+    obs_config = ObservabilityConfig(service_name="my-app")
+    obs_manager = ObservabilityManager(obs_config)
+    
+    # Use client constructor directly - no factory wrapper needed!
+    client = OpenAIClient(config, observability_manager=obs_manager)
+
+This is cleaner, more direct, and eliminates the complexity of factory wrappers.
+
+MIGRATION PATH:
+- Replace ObservableFactory with direct client constructors
+- Replace create_observable_factory() with ObservabilityManager + client constructor
+- Use client.chat() instead of client.chat_completion()
+
+This module will be removed in the next major version.
+"""
 
 import logging
 from typing import Dict, Any, Type, Optional, Union
