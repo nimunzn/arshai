@@ -91,7 +91,7 @@ def multiply_function(a: float, b: float) -> float:
 background_task_executed = None
 
 def send_admin_notification(event: str, details: str = "User interaction") -> None:
-    """Send notification to admin channel about system events and set test variable."""
+    """BACKGROUND TASK: Send notification to admin channel about system events and set test variable. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."""
     global background_task_executed
     import time
     time.sleep(0.1)  # Simulate notification work
@@ -106,10 +106,10 @@ def send_admin_notification(event: str, details: str = "User interaction") -> No
 # Test Models for Chat (Pydantic)
 class SentimentAnalysis(BaseModel):
     """Sentiment analysis result for chat testing"""
-    key_points: list[str] = Field(description="List of key points identified")
     topic: str = Field(description="Main topic analyzed")
     sentiment: str = Field(description="Overall sentiment (positive/negative/neutral)")
     confidence: float = Field(description="Confidence score between 0.0 and 1.0")
+    key_points: list[str] = Field(description="List of key points identified")
 
     
 
