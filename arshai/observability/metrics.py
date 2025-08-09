@@ -28,9 +28,12 @@ class TimingData:
     start_time: float = field(default_factory=time.time)
     first_token_time: Optional[float] = None
     last_token_time: Optional[float] = None
-    completion_tokens: int = 0
-    prompt_tokens: int = 0
+    # Token counts - using LLM client naming convention
+    input_tokens: int = 0
+    output_tokens: int = 0
     total_tokens: int = 0
+    thinking_tokens: int = 0
+    tool_calling_tokens: int = 0
     
     @property
     def time_to_first_token(self) -> Optional[float]:
@@ -70,11 +73,14 @@ class TimingData:
         if self.first_token_time is None:
             self.first_token_time = self.last_token_time
     
-    def update_token_counts(self, prompt_tokens: int = 0, completion_tokens: int = 0, total_tokens: int = 0):
+    def update_token_counts(self, input_tokens: int = 0, output_tokens: int = 0, total_tokens: int = 0,
+                           thinking_tokens: int = 0, tool_calling_tokens: int = 0):
         """Update token counts from usage data."""
-        self.prompt_tokens = prompt_tokens
-        self.completion_tokens = completion_tokens
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
         self.total_tokens = total_tokens
+        self.thinking_tokens = thinking_tokens
+        self.tool_calling_tokens = tool_calling_tokens
 
 
 class MetricsCollector:
@@ -174,15 +180,28 @@ class MetricsCollector:
             unit="1"
         )
         
-        self.llm_prompt_tokens = self.meter.create_counter(
-            name="llm_prompt_tokens",
-            description="Total number of prompt tokens",
+        self.llm_input_tokens = self.meter.create_counter(
+            name="llm_input_tokens",
+            description="Total number of input tokens",
             unit="1"
         )
         
-        self.llm_completion_tokens = self.meter.create_counter(
-            name="llm_completion_tokens", 
-            description="Total number of completion tokens",
+        self.llm_output_tokens = self.meter.create_counter(
+            name="llm_output_tokens", 
+            description="Total number of output tokens",
+            unit="1"
+        )
+        
+        # Additional token type metrics
+        self.llm_thinking_tokens = self.meter.create_counter(
+            name="llm_thinking_tokens",
+            description="Total number of thinking/reasoning tokens",
+            unit="1"
+        )
+        
+        self.llm_tool_calling_tokens = self.meter.create_counter(
+            name="llm_tool_calling_tokens",
+            description="Total number of tool calling tokens",
             unit="1"
         )
         
@@ -239,9 +258,11 @@ class MetricsCollector:
         """
         if usage_data:
             timing_data.update_token_counts(
-                prompt_tokens=usage_data.get('prompt_tokens', 0),
-                completion_tokens=usage_data.get('completion_tokens', 0),
-                total_tokens=usage_data.get('total_tokens', 0)
+                input_tokens=usage_data.get('input_tokens', 0),
+                output_tokens=usage_data.get('output_tokens', 0),
+                total_tokens=usage_data.get('total_tokens', 0),
+                thinking_tokens=usage_data.get('thinking_tokens', 0),
+                tool_calling_tokens=usage_data.get('tool_calling_tokens', 0)
             )
     
     async def record_request_start(self, attributes: Dict[str, Any]) -> TimingData:
@@ -294,10 +315,14 @@ class MetricsCollector:
             # Record token counts
             if timing_data.total_tokens > 0:
                 self.llm_tokens_total.add(timing_data.total_tokens, attributes)
-            if timing_data.prompt_tokens > 0:
-                self.llm_prompt_tokens.add(timing_data.prompt_tokens, attributes)
-            if timing_data.completion_tokens > 0:
-                self.llm_completion_tokens.add(timing_data.completion_tokens, attributes)
+            if timing_data.input_tokens > 0:
+                self.llm_input_tokens.add(timing_data.input_tokens, attributes)
+            if timing_data.output_tokens > 0:
+                self.llm_output_tokens.add(timing_data.output_tokens, attributes)
+            if timing_data.thinking_tokens > 0:
+                self.llm_thinking_tokens.add(timing_data.thinking_tokens, attributes)
+            if timing_data.tool_calling_tokens > 0:
+                self.llm_tool_calling_tokens.add(timing_data.tool_calling_tokens, attributes)
             
             # Record KEY METRICS - the ones specifically requested
             if timing_data.time_to_first_token is not None:
@@ -313,8 +338,8 @@ class MetricsCollector:
             self.llm_request_duration.record(timing_data.total_duration, attributes)
             
             # Calculate and record throughput
-            if timing_data.completion_tokens > 0 and timing_data.total_duration > 0:
-                tokens_per_second = timing_data.completion_tokens / timing_data.total_duration
+            if timing_data.output_tokens > 0 and timing_data.total_duration > 0:
+                tokens_per_second = timing_data.output_tokens / timing_data.total_duration
                 self.llm_tokens_per_second.record(tokens_per_second, attributes)
             
         except Exception as e:
