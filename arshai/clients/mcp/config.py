@@ -1,14 +1,13 @@
 """
 MCP Server Configuration Management
 
-Handles configuration for multiple MCP servers using the project's Settings system.
-Reads configuration from config.yaml through the ISetting interface.
+Handles configuration for multiple MCP servers using direct configuration.
+Reads configuration from dictionaries or config files.
 """
 
 import os
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
-from arshai.core.interfaces.isetting import ISetting
 from .exceptions import MCPConfigurationError
 
 
@@ -60,23 +59,40 @@ class MCPConfig:
                 raise MCPConfigurationError(f"Duplicate server names found: {', '.join(set(duplicates))}")
     
     @classmethod
-    def from_settings(cls, settings: ISetting) -> 'MCPConfig':
+    def from_dict(cls, config_dict: Dict[str, Any]) -> 'MCPConfig':
         """
-        Load MCP configuration from the project's Settings system.
-        
-        Reads configuration from config.yaml using the ISetting interface.
+        Load MCP configuration from a dictionary.
         
         Args:
-            settings: ISetting instance (e.g., from workflow or agent)
+            config_dict: Configuration dictionary containing MCP settings
             
         Returns:
-            MCPConfig instance with servers from config.yaml
+            MCPConfig instance with servers from configuration
             
         Raises:
             MCPConfigurationError: If configuration is invalid
+            
+        Example:
+            config = {
+                "mcp": {
+                    "enabled": True,
+                    "connection_timeout": 30,
+                    "default_max_retries": 3,
+                    "servers": [
+                        {
+                            "name": "taloan",
+                            "url": "https://taloan-mcp-baadbaan.rahkar.team/mcp/",
+                            "timeout": 30,
+                            "max_retries": 3,
+                            "description": "Taloan MCP server for user and loan information"
+                        }
+                    ]
+                }
+            }
+            mcp_config = MCPConfig.from_dict(config)
         """
-        # Get MCP configuration section from config.yaml
-        mcp_config = settings.get("mcp", {})
+        # Get MCP configuration section
+        mcp_config = config_dict.get("mcp", {})
         
         # Check if MCP is enabled
         enabled = mcp_config.get("enabled", False)
@@ -130,6 +146,26 @@ class MCPConfig:
             connection_timeout=connection_timeout,
             default_max_retries=default_max_retries
         )
+    
+    @classmethod
+    def from_config_file(cls, config_path: str) -> 'MCPConfig':
+        """
+        Load MCP configuration from a YAML config file.
+        
+        Args:
+            config_path: Path to YAML configuration file
+            
+        Returns:
+            MCPConfig instance
+            
+        Example:
+            # Load from config.yaml
+            mcp_config = MCPConfig.from_config_file("config.yaml")
+        """
+        from arshai.config import load_config
+        
+        config_dict = load_config(config_path)
+        return cls.from_dict(config_dict)
     
     def get_server(self, name: str) -> Optional[MCPServerConfig]:
         """Get server configuration by name."""
