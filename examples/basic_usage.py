@@ -1,21 +1,25 @@
 """
 Basic Usage of Arshai Components
 
-This example demonstrates:
-1. Creating and using predefined agents through settings
-2. Implementing and using custom agents directly
-3. Using factory patterns for predefined components (LLMs, Memory)
-4. Working with settings
+This example demonstrates the new direct instantiation approach:
+1. Creating LLM clients directly with explicit configuration
+2. Creating agents with explicit dependencies
+3. Using tools with direct instantiation
+4. Working with optional configuration loading
 
-The simplified architecture emphasizes direct instantiation for custom components
-while using factories only for predefined components.
+The three-layer architecture emphasizes developer control through direct instantiation.
 """
 
-from arshai.core.interfaces import IAgentConfig, IAgentInput, IAgentOutput, IAgent
-from arshai.core.interfaces import ILLMConfig
-from arshai.core.interfaces import ISetting
-from arshai.config.settings import Settings
-from arshai.factories import LLMFactory, MemoryFactory
+import os
+import asyncio
+from arshai.core.interfaces.iagent import IAgentInput
+from arshai.core.interfaces.illm import ILLMConfig, ILLMInput
+from arshai.llms.openai import OpenAIClient
+from arshai.memory.working_memory.in_memory_manager import InMemoryManager
+from arshai.agents.working_memory import WorkingMemoryAgent
+from arshai.agents.base import BaseAgent
+from arshai.tools.web_search_tool import WebSearchTool
+from arshai.config import load_config
 
 
 # =========================================================================
