@@ -25,7 +25,6 @@ from .idocument import Document
 from .iembedding import IEmbedding
 from .ivector_db_client import IVectorDBClient
 from .isearch_client import ISearchClient
-from .isetting import ISetting
 from .idto import IDTO, IStreamDTO
 
 # All available interfaces
@@ -43,7 +42,7 @@ __all__ = [
     # Document
     "Document",
     # Other
-    "IEmbedding", "IVectorDBClient", "ISearchClient", "ISetting", "IDTO", "IStreamDTO",
+    "IEmbedding", "IVectorDBClient", "ISearchClient", "IDTO", "IStreamDTO",
 ]
 
 # Backward compatibility

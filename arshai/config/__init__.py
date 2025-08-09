@@ -1,10 +1,25 @@
 """
 Configuration management for Arshai.
 
-This module provides utilities for loading, validating, and accessing configuration settings.
+This module provides optional configuration utilities for developers who want to use
+configuration files. All configuration is optional - components work without config files.
 """
 
 from .config_manager import ConfigManager
-from .settings import Settings
+from .config_loader import (
+    load_config,
+    ConfigLoader,
+    EXAMPLE_CONFIG
+)
 
-__all__ = ["ConfigManager", "Settings"] 
+# Settings pattern has been removed - use direct instantiation instead
+
+__all__ = [
+    # Configuration utilities
+    "load_config",
+    "ConfigLoader",
+    "EXAMPLE_CONFIG",
+    
+    # Legacy (deprecated)
+    "ConfigManager",
+] 
