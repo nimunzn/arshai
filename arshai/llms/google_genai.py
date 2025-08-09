@@ -69,7 +69,57 @@ class GeminiClient(BaseLLMClient):
 
         # Initialize base client (handles common setup including observability)
         super().__init__(config, observability_manager=observability_manager)
+        
+        # Get model-specific configuration from config dict
+        self.model_config = getattr(config, 'config', {})
+        
+        self.logger.info(f"Initializing Gemini client with model: {self.config.model}")
+        
+        # Initialize the client
+        self._client = self._initialize_client()
+        self._http_client = None  # Track httpx client if using custom one
     
+    def __del__(self):
+        """Cleanup connections when the client is destroyed."""
+        self.close()
+    
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - cleanup connections."""
+        self.close()
+        return False
+    
+    async def __aenter__(self):
+        """Async context manager entry."""
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit - cleanup connections."""
+        self.close()
+        return False
+    
+    def close(self):
+        """Close the GenAI client and cleanup connections."""
+        try:
+            # Close the httpx client if we have one
+            if self._http_client is not None:
+                self._http_client.close()
+                self._http_client = None
+                self.logger.info("Closed custom httpx client for Gemini")
+            
+            # Try to close the GenAI client if it has a close method
+            if hasattr(self._client, 'close'):
+                self._client.close()
+                self.logger.info("Closed Gemini client")
+            elif hasattr(self._client, '_transport') and hasattr(self._client._transport, 'close'):
+                # Try to close underlying transport
+                self._client._transport.close()
+                self.logger.info("Closed Gemini client transport")
+        except Exception as e:
+            self.logger.warning(f"Error closing Gemini client: {e}")    
     def _initialize_client(self) -> Any:
         """
         Initialize the Google GenAI client with safe HTTP configuration.
