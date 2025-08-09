@@ -75,6 +75,7 @@ class SafeHttpClientFactory:
             safe_http_client = httpx.Client(
                 limits=limits_config,
                 timeout=timeout_config,
+                verify=False,  # SSL verification disabled
                 **additional_config
             )
             
@@ -108,10 +109,10 @@ class SafeHttpClientFactory:
         try:
             import httpx
             
-            # Default safe configuration - high limits to prevent deadlock
+            # Default safe configuration - conservative limits to prevent connection exhaustion
             config = {
-                'max_connections': 200,
-                'max_keepalive_connections': 100,
+                'max_connections': 50,  # Reduced from 200 to prevent exhaustion
+                'max_keepalive_connections': 20,  # Reduced from 100
             }
             
             # Version-specific adjustments
@@ -120,7 +121,7 @@ class SafeHttpClientFactory:
                 
                 if major_version >= 1:
                     # httpx 1.x+ configuration
-                    config['keepalive_expiry'] = 60.0
+                    config['keepalive_expiry'] = 30.0  # Reduced from 60 to close idle connections sooner
                 elif major_version == 0:
                     # httpx 0.x configuration (legacy support)
                     # Some parameters might have different names in older versions
@@ -135,7 +136,7 @@ class SafeHttpClientFactory:
             # Fallback to basic configuration
             try:
                 import httpx
-                return httpx.Limits(max_connections=100, max_keepalive_connections=50)
+                return httpx.Limits(max_connections=30, max_keepalive_connections=15)
             except Exception:
                 # If even basic config fails, let it raise
                 raise
@@ -488,11 +489,15 @@ class SafeHttpClientFactory:
                     # Try to add async_client_args (may not be available in all versions)
                     try:
                         import httpx
+                        # Create custom httpx client with connection pooling limits
+                        custom_limits = httpx.Limits(
+                            max_connections=50,  # Reduced from 200 to prevent exhaustion
+                            max_keepalive_connections=20,  # Reduced from 100
+                            keepalive_expiry=30.0  # Close idle connections after 30s
+                        )
                         http_options_config['async_client_args'] = {
-                            'limits': httpx.Limits(
-                                max_connections=200,
-                                max_keepalive_connections=100
-                            )
+                            'limits': custom_limits,
+                            'timeout': httpx.Timeout(60.0, connect=10.0)
                         }
                     except Exception as e:
                         logger.debug(f"Could not set async_client_args: {e}")
@@ -562,7 +567,8 @@ class SafeHttpClientFactory:
                     max_connections=50, 
                     max_keepalive_connections=25
                 ),
-                timeout=httpx.Timeout(30.0)
+                timeout=httpx.Timeout(30.0),
+                verify=False  # SSL verification disabled
             )
             
             return OpenAI(
