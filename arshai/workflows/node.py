@@ -1,14 +1,14 @@
 from typing import Dict, Any, Optional, Callable
 from arshai.core.interfaces.iworkflow import INode, IWorkflowState
 from arshai.core.interfaces.iagent import IAgent, IAgentInput, IAgentConfig
-from arshai.core.interfaces.isetting import ISetting
 from arshai.utils import get_logger
 
 class BaseNode(INode):
     """Base implementation of the INode interface.
     
     Wraps an agent and provides the node interface for workflow integration.
-    This implementation follows the pattern where nodes directly operate on workflow state.
+    This implementation follows the direct dependency injection pattern where
+    the agent is provided directly rather than through Settings.
     """
     
     def __init__(
@@ -16,7 +16,7 @@ class BaseNode(INode):
         node_id: str,
         name: str,
         agent: IAgent,
-        settings: Optional[ISetting] = None,
+        node_config: Optional[Dict[str, Any]] = None,
         **kwargs: Any
     ):
         """Initialize a node with an agent.
@@ -25,13 +25,29 @@ class BaseNode(INode):
             node_id: Unique identifier for this node
             name: Descriptive name for this node
             agent: The agent implementation this node will use
-            settings: Optional settings to override agent defaults
+            node_config: Optional configuration dictionary for this node
             **kwargs: Additional node-specific settings
+        
+        Example:
+            # Create agent first
+            from arshai.agents.working_memory import WorkingMemoryAgent
+            from arshai.llms.openai import OpenAIClient
+            
+            llm_client = OpenAIClient(config)
+            agent = WorkingMemoryAgent(llm_client, memory_manager, "You are helpful")
+            
+            # Create node with agent
+            node = BaseNode(
+                node_id="process_user_query",
+                name="Process User Query", 
+                agent=agent,
+                node_config={"timeout": 30, "retries": 3}
+            )
         """
         self._node_id = node_id
         self._name = name
         self._agent = agent
-        self._settings = settings
+        self._node_config = node_config or {}
         self._kwargs = kwargs
         self._logger = get_logger(__name__)
         
@@ -125,10 +141,8 @@ class BaseNode(INode):
             }
     
     def get_agent_settings(self) -> Dict[str, Any]:
-        """Get the settings associated with the agent for this node."""
-        if self._settings:
-            return self._settings.model_dump()
-        return {}
+        """Get the configuration associated with this node."""
+        return self._node_config.copy()
         
     def __call__(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Make the node callable, directly delegating to the process method.
