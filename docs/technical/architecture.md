@@ -129,55 +129,156 @@ classDiagram
 
 ### Agent System
 
-The Agent System encapsulates language models with contextual awareness, tool usage capabilities, and memory management.
+The Agent System provides a minimal, flexible framework for building intelligent agents that interact with LLMs and external tools. The system prioritizes simplicity and composition over complex inheritance hierarchies.
 
 ```mermaid
 classDiagram
     class IAgent {
         <<interface>>
-        +process_message(message, conversation_id) Response
-        +process_messages(messages, conversation_id) Response
-        +get_tools() List[Tool]
-        +get_memory() IMemoryManager
+        +process(input: IAgentInput) Any
+    }
+    
+    class IAgentInput {
+        +message: str
+        +metadata: Optional[Dict[str, Any]]
     }
     
     class BaseAgent {
-        -llm_provider: ILLMProvider
-        -memory_manager: IMemoryManager
-        -tools: List[Tool]
-        -config: AgentConfig
-        +process_message(message, conversation_id) Response
-        +process_messages(messages, conversation_id) Response
-        #_prepare_prompt(message, context) str
-        #_post_process_response(response) Response
+        <<abstract>>
+        -llm_client: ILLM
+        -system_prompt: str
+        -config: Dict[str, Any]
+        +__init__(llm_client, system_prompt, **kwargs)
+        +process(input: IAgentInput) Any*
     }
     
-    class ConversationAgent {
-        +process_message(message, conversation_id) Response
-        +process_messages(messages, conversation_id) Response
-        #_prepare_system_prompt() str
-        #_handle_tool_calls(response) Response
+    class WorkingMemoryAgent {
+        -memory_manager: Optional[IMemoryManager]
+        +__init__(llm_client, memory_manager, **kwargs)
+        +process(input: IAgentInput) str
+        -_build_working_memory_prompt() str
+        -_store_memory() None
     }
     
-    class RAGAgent {
-        -vector_store: IVectorStore
-        -document_processor: IDocumentProcessor
-        +process_message(message, conversation_id) Response
-        #_retrieve_context(message) List[Document]
-        #_prepare_rag_prompt(message, context) str
+    class SimpleAgent {
+        +process(input: IAgentInput) str
+        -_prepare_llm_input() ILLMInput
+    }
+    
+    class CustomSpecializedAgent {
+        +process(input: IAgentInput) Dict[str, Any]
+        -_custom_logic() Any
+        -_tool_integration() None
     }
     
     IAgent <|.. BaseAgent
-    BaseAgent <|-- ConversationAgent
-    BaseAgent <|-- RAGAgent
+    BaseAgent <|-- WorkingMemoryAgent
+    BaseAgent <|-- SimpleAgent
+    BaseAgent <|-- CustomSpecializedAgent
+    
+    BaseAgent --> ILLM
+    BaseAgent --> IAgentInput
+    WorkingMemoryAgent --> IMemoryManager
+```
+
+#### Core Design Principles
+
+**1. Minimal Interface**
+- Single method contract: `process(input: IAgentInput) -> Any`
+- Flexible return types to accommodate different use cases
+- Input standardized through `IAgentInput` with message and optional metadata
+
+**2. Stateless Design**
+- Agents maintain no conversation state internally
+- State management delegated to external memory managers
+- Enables concurrent processing and horizontal scaling
+
+**3. Composition over Inheritance**
+- Agents compose LLM clients, memory managers, and tools
+- No enforced tool framework - use any Python function
+- Framework-agnostic approach allows integration with existing systems
+
+**4. Function Calling Integration**
+- Regular functions: Return results to LLM conversation
+- Background tasks: Fire-and-forget operations for logging/monitoring
+- Dynamic tool selection based on agent requirements
+
+#### Agent Types and Patterns
+
+| Agent Type | Use Case | Return Type | Key Features |
+|------------|----------|-------------|--------------|
+| **SimpleAgent** | Basic LLM interaction | `str` | Direct message processing, minimal overhead |
+| **WorkingMemoryAgent** | Conversation context management | `str` ("success"/"error") | Automatic memory updates, conversation continuity |
+| **SpecializedAgent** | Domain-specific tasks | `Dict[str, Any]` | Structured output, custom validation, tool integration |
+| **OrchestrationAgent** | Multi-agent coordination | `Dict[str, Any]` | Agent composition, workflow management |
+
+#### Implementation Patterns
+
+**Basic Agent Pattern:**
+```python
+class MyAgent(BaseAgent):
+    async def process(self, input: IAgentInput) -> str:
+        llm_input = ILLMInput(
+            system_prompt=self.system_prompt,
+            user_message=input.message
+        )
+        result = await self.llm_client.chat(llm_input)
+        return result.get('llm_response', '')
+```
+
+**Tool Integration Pattern:**
+```python
+class ToolEnabledAgent(BaseAgent):
+    async def process(self, input: IAgentInput) -> Dict[str, Any]:
+        def calculate(expression: str) -> float:
+            return eval(expression)  # Example tool
+        
+        async def log_interaction(query: str) -> None:
+            print(f"Background task: {query}")  # Background task
+        
+        llm_input = ILLMInput(
+            system_prompt=self.system_prompt,
+            user_message=input.message,
+            regular_functions={"calculate": calculate},
+            background_tasks={"log_interaction": log_interaction}
+        )
+        result = await self.llm_client.chat(llm_input)
+        return {"response": result.get('llm_response', '')}
+```
+
+**Agent Composition Pattern:**
+```python
+class OrchestratorAgent(BaseAgent):
+    def __init__(self, llm_client: ILLM, specialized_agents: Dict[str, IAgent], **kwargs):
+        super().__init__(llm_client, system_prompt, **kwargs)
+        self.agents = specialized_agents
+    
+    async def process(self, input: IAgentInput) -> Dict[str, Any]:
+        # Use LLM function calling to coordinate specialist agents
+        async def call_specialist(agent_name: str, task: str) -> str:
+            if agent_name in self.agents:
+                result = await self.agents[agent_name].process(
+                    IAgentInput(message=task)
+                )
+                return str(result)
+            return "Agent not found"
+        
+        llm_input = ILLMInput(
+            system_prompt="Coordinate specialist agents to complete tasks",
+            user_message=input.message,
+            regular_functions={"call_specialist": call_specialist}
+        )
+        result = await self.llm_client.chat(llm_input)
+        return {"orchestrator_response": result.get('llm_response', '')}
 ```
 
 | Component | Responsibility |
 |-----------|----------------|
-| Agent Interfaces | Define contracts for agent behavior and integration |
-| Agent Implementations | Provide concrete agent behaviors with specific capabilities |
-| Tool Integration | Connect agents to external functionalities and systems |
-| Structured Output | Define and enforce schemas for agent responses |
+| **IAgent Interface** | Defines minimal contract for all agents |
+| **BaseAgent** | Provides common initialization and LLM client management |
+| **WorkingMemoryAgent** | Specialized for conversation context management |
+| **Agent Composition** | Patterns for coordinating multiple agents |
+| **Tool Integration** | Python function integration with LLM function calling |
 
 ### Memory Management
 
@@ -310,25 +411,41 @@ classDiagram
 sequenceDiagram
     participant C as Client
     participant A as Agent
-    participant L as LLM
-    participant M as Memory
-    participant T as Tools
+    participant L as LLM Client
+    participant M as Memory Manager
+    participant F as Functions/Tools
+    participant B as Background Tasks
     
-    C->>A: process_message(input)
-    A->>M: retrieve_context(conversation_id)
-    M-->>A: conversation_history
-    A->>L: generate_response(input, history, tools)
-    L-->>A: response_with_tool_calls
+    C->>A: process(IAgentInput)
     
-    alt Tool Usage Required
-        A->>T: execute_tool(tool_name, parameters)
-        T-->>A: tool_result
-        A->>L: generate_final_response(tool_result)
-        L-->>A: final_response
+    alt Memory-Enabled Agent
+        A->>M: retrieve(conversation_id)
+        M-->>A: existing_memory
     end
     
-    A->>M: save_interaction(conversation_id, input, response)
-    A-->>C: agent_response
+    A->>A: prepare_llm_input(regular_functions, background_tasks)
+    A->>L: chat(ILLMInput)
+    
+    alt Function Calling Required
+        L->>F: execute_regular_function(args)
+        F-->>L: function_result
+        
+        par Background Tasks
+            L->>B: fire_and_forget_task(args)
+            Note over B: Executes independently
+        end
+        
+        L->>L: continue_conversation_with_results
+    end
+    
+    L-->>A: llm_response + usage
+    
+    alt Memory-Enabled Agent
+        A->>M: store(updated_memory)
+        A-->>C: "success" | "error: description"
+    else Standard Agent
+        A-->>C: response_data (str | Dict[str, Any])
+    end
 ```
 
 ### Workflow Execution Flow
@@ -601,9 +718,9 @@ classDiagram
     class IObservabilityManager {
         <<interface>>
         +observe_llm_call(provider, model, method) AsyncContextManager
+        +observe_streaming_llm_call(provider, model, method) AsyncContextManager
         +record_usage_data(timing_data, usage) None
         +pre_call_token_count(provider, model, messages) TokenCountResult
-        +process_streaming_chunk(provider, model, chunk, timing) UsageData
     }
     
     class ObservabilityManager {
@@ -612,9 +729,9 @@ classDiagram
         -tracer: Tracer
         -token_counter_factory: TokenCounterFactory
         +observe_llm_call(provider, model, method) AsyncContextManager
+        +observe_streaming_llm_call(provider, model, method) AsyncContextManager
         +record_usage_data(timing_data, usage) None
         +pre_call_token_count(provider, model, messages) TokenCountResult
-        +process_streaming_chunk(provider, model, chunk, timing) UsageData
     }
     
     class MetricsCollector {
