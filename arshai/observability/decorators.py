@@ -72,13 +72,16 @@ def with_observability(provider: str,
                     # Extract usage information if available (non-intrusive)
                     if isinstance(result, dict) and 'usage' in result:
                         usage = result['usage']
-                        if usage and hasattr(usage, 'prompt_tokens'):
+                        if usage and (hasattr(usage, 'input_tokens') or hasattr(usage, 'prompt_tokens')):
                             # For sync methods, we need to run async method in event loop
-                            asyncio.run(manager.record_usage_data(timing_data, {
-                                'prompt_tokens': getattr(usage, 'prompt_tokens', 0),
-                                'completion_tokens': getattr(usage, 'completion_tokens', 0),
-                                'total_tokens': getattr(usage, 'total_tokens', 0)
-                            }))
+                            usage_data = {
+                                'input_tokens': getattr(usage, 'input_tokens', getattr(usage, 'prompt_tokens', 0)),
+                                'output_tokens': getattr(usage, 'output_tokens', getattr(usage, 'completion_tokens', 0)),
+                                'total_tokens': getattr(usage, 'total_tokens', 0),
+                                'thinking_tokens': getattr(usage, 'thinking_tokens', 0),
+                                'tool_calling_tokens': getattr(usage, 'tool_calling_tokens', 0)
+                            }
+                            asyncio.run(manager.record_usage_data(timing_data, usage_data))
                     
                     # Record completion timing
                     timing_data.record_token()
@@ -122,13 +125,16 @@ def with_observability(provider: str,
                         # Check for usage data in the chunk (non-intrusive)
                         if isinstance(chunk, dict) and 'usage' in chunk and chunk['usage']:
                             usage = chunk['usage']
-                            if hasattr(usage, 'prompt_tokens'):
+                            if hasattr(usage, 'input_tokens') or hasattr(usage, 'prompt_tokens'):
                                 # Use async method for recording usage data
-                                await manager.record_usage_data(timing_data, {
-                                    'prompt_tokens': getattr(usage, 'prompt_tokens', 0),
-                                    'completion_tokens': getattr(usage, 'completion_tokens', 0),
-                                    'total_tokens': getattr(usage, 'total_tokens', 0)
-                                })
+                                usage_data = {
+                                    'input_tokens': getattr(usage, 'input_tokens', getattr(usage, 'prompt_tokens', 0)),
+                                    'output_tokens': getattr(usage, 'output_tokens', getattr(usage, 'completion_tokens', 0)),
+                                    'total_tokens': getattr(usage, 'total_tokens', 0),
+                                    'thinking_tokens': getattr(usage, 'thinking_tokens', 0),
+                                    'tool_calling_tokens': getattr(usage, 'tool_calling_tokens', 0)
+                                }
+                                await manager.record_usage_data(timing_data, usage_data)
                                 final_usage = usage
                         
                         yield chunk

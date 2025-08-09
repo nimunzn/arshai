@@ -279,13 +279,17 @@ class ObservabilityManager:
             
             span.set_attribute("llm.total_duration", timing_data.total_duration)
             
-            # Token counts
-            if timing_data.prompt_tokens > 0:
-                span.set_attribute("llm.usage.prompt_tokens", timing_data.prompt_tokens)
-            if timing_data.completion_tokens > 0:
-                span.set_attribute("llm.usage.completion_tokens", timing_data.completion_tokens)
+            # Token counts - using LLM client naming convention
+            if timing_data.input_tokens > 0:
+                span.set_attribute("llm.usage.input_tokens", timing_data.input_tokens)
+            if timing_data.output_tokens > 0:
+                span.set_attribute("llm.usage.output_tokens", timing_data.output_tokens)
             if timing_data.total_tokens > 0:
                 span.set_attribute("llm.usage.total_tokens", timing_data.total_tokens)
+            if timing_data.thinking_tokens > 0:
+                span.set_attribute("llm.usage.thinking_tokens", timing_data.thinking_tokens)
+            if timing_data.tool_calling_tokens > 0:
+                span.set_attribute("llm.usage.tool_calling_tokens", timing_data.tool_calling_tokens)
                 
         except Exception as e:
             self.logger.warning(f"Failed to update span with timing: {e}")
@@ -295,52 +299,12 @@ class ObservabilityManager:
         
         Args:
             timing_data: TimingData instance to update
-            usage_data: Usage data from LLM response (prompt_tokens, completion_tokens, total_tokens)
+            usage_data: Usage data from LLM response with fields:
+                       input_tokens, output_tokens, total_tokens, thinking_tokens, tool_calling_tokens
         """
         if self.metrics_collector:
             await self.metrics_collector.record_usage_data(timing_data, usage_data)
     
-    async def process_streaming_chunk(self, chunk: Dict[str, Any], timing_data: TimingData) -> Optional[Dict[str, int]]:
-        """Process a streaming chunk for timing and usage data extraction.
-        
-        Args:
-            chunk: Streaming response chunk
-            timing_data: Timing data to update
-            
-        Returns:
-            Usage data if found in chunk, None otherwise
-        """
-        if not self.is_enabled():
-            return None
-        
-        try:
-            # Extract content from chunk for timing
-            content = ""
-            if 'choices' in chunk and chunk['choices']:
-                delta = chunk['choices'][0].get('delta', {})
-                content = delta.get('content', '')
-            elif 'delta' in chunk:
-                content = chunk['delta'].get('text', '')
-            elif 'text' in chunk:
-                content = chunk['text']
-            elif 'content' in chunk:
-                content = chunk['content']
-            
-            # Record token timing
-            if content:
-                timing_data.record_token()
-            
-            # Check for usage data in final chunk (most LLM providers include this)
-            if 'usage' in chunk:
-                usage_data = chunk['usage']
-                await self.record_usage_data(timing_data, usage_data)
-                return usage_data
-                
-            return None
-            
-        except Exception as e:
-            self.logger.warning(f"Failed to process streaming chunk: {e}")
-            return None
     
     def get_config(self) -> ObservabilityConfig:
         """Get the current configuration."""

@@ -138,8 +138,8 @@ async def main():
         obs_manager = observable_factory.get_observability_manager()
         async with obs_manager.observe_streaming_llm_call("openai", "gpt-3.5-turbo", "stream_example") as timing:
             async for chunk in observable_client.stream_completion(streaming_input):
-                # Process each chunk for token counting and timing
-                usage_data = obs_manager.process_streaming_chunk("openai", "gpt-3.5-turbo", chunk, timing)
+                # Extract usage data from chunk (handled automatically by client now)
+                usage_data = chunk.get('usage')
                 
                 if chunk.get('llm_response'):
                     content = chunk['llm_response']
