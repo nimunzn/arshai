@@ -215,9 +215,9 @@ View in Jaeger UI at `http://localhost:16686`
 
 **❌ Old (Deprecated):**
 ```python
-from src.factories.llm_factory import LLMFactory
+from arshai.utils.llm_utils import create_llm_client
 
-client = LLMFactory.create_with_observability(
+client = create_llm_client(
     provider="openai",
     config=llm_config,
     observability_config=obs_config
