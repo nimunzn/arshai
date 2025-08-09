@@ -328,8 +328,16 @@ class BaseLLMClient(ILLM, ABC):
                 "chat"
             ) as timing_data:
                 result = await self._execute_chat(input)
+                
+                # Record token timing - for non-streaming, we record completion timing
+                timing_data.record_token()
+                
+                # Record usage data if available
                 if 'usage' in result:
+                    self.logger.debug(f"Usage: {result['usage']}")
                     await self.observability_manager.record_usage_data(timing_data, result['usage'])
+                    
+                self.logger.debug(f"Timing Data: {timing_data}")
                 return result
         else:
             return await self._execute_chat(input)
@@ -382,9 +390,26 @@ class BaseLLMClient(ILLM, ABC):
                 self.config.model,
                 "stream"
             ) as timing_data:
+                first_token_recorded = False
+                
                 async for chunk in self._execute_stream(input):
-                    await self.observability_manager.process_streaming_chunk(chunk, timing_data)
+                    # Record first token timing - simple approach like decorators
+                    if not first_token_recorded:
+                        timing_data.record_first_token()
+                        first_token_recorded = True
+                    
+                    # Record each token - every chunk represents token generation progress
+                    timing_data.record_token()
+                    
+                    # Extract usage data directly from chunk (we know our own structure)
+                    if 'usage' in chunk and chunk['usage']:
+                        await self.observability_manager.record_usage_data(timing_data, chunk['usage'])
+                    
                     yield chunk
+                    
+                # Record final timing if we had tokens
+                if first_token_recorded:
+                    timing_data.record_token()
         else:
             async for chunk in self._execute_stream(input):
                 yield chunk
