@@ -6,7 +6,6 @@ from datetime import datetime
 from pydantic import BaseModel, Field, model_validator
 
 from .idto import IDTO, IStreamDTO
-from .iagent import IAgentOutput, IAgentStreamOutput
 
 T = TypeVar('T')
 
@@ -43,25 +42,6 @@ class ILLMInput(IDTO):
         return data
 
 
-class ILLMOutput(IDTO):
-    """
-    Represents the complete response from the agent
-
-    agent_message: The actual response message to the user
-    """
-    agent_message: IAgentOutput = Field(
-        description="""The message (response) of llm to the user message."""
-    )
-
-class ILLMStreamOutput(IStreamDTO):
-    """
-    Represents the complete stream response from the agent, 
-
-    agent_message: The actual response message to the user
-    """
-    agent_message: IAgentStreamOutput = Field(description="The message (response) of llm to the user message.")
-
-
 class ILLMConfig(IDTO):
     """Configuration for LLM providers"""
     model: str
@@ -94,11 +74,3 @@ class ILLM(Protocol):
         """Convert python callables to provider-specific function declarations"""
         ...
     
-    # Deprecated methods (backward compatibility)
-    async def chat_with_tools(self, input: ILLMInput) -> Union[ILLMOutput, str]:
-        """Deprecated: Use chat() instead"""
-        ...
-    
-    def chat_completion(self, input: ILLMInput) -> Union[ILLMOutput, str]:
-        """Deprecated: Use chat() instead"""
-        ...
