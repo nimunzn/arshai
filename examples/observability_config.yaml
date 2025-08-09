@@ -1,0 +1,74 @@
+# Example observability configuration for Arshai
+# This file demonstrates how to configure comprehensive LLM observability
+
+# Basic LLM configuration
+llm:
+  provider: openai
+  model: gpt-4
+  temperature: 0.7
+
+# Observability configuration
+observability:
+  # Basic controls (always enabled)
+  trace_requests: true
+  collect_metrics: true
+  
+  # Service identification
+  service_name: "my-arshai-app"
+  service_version: "1.0.0"
+  environment: "production"
+  
+  # Token timing - KEY METRICS
+  track_token_timing: true  # Controls the 4 key metrics globally
+  stream_chunk_timeout: 30.0
+  
+  # Privacy controls (be careful in production)
+  log_prompts: false  # Set to true only in development
+  log_responses: false  # Set to true only in development
+  max_prompt_length: 1000
+  max_response_length: 1000
+  
+  # OpenTelemetry export (optional)
+  # otlp_endpoint: "http://localhost:4317"
+  # otlp_headers:
+  #   Authorization: "Bearer your-token"
+  #   X-Custom-Header: "value"
+  otlp_timeout: 10
+  
+  # Non-intrusive mode (recommended)
+  non_intrusive: true
+  
+  # Custom attributes for all traces
+  custom_attributes:
+    team: "ai-platform"
+    component: "llm-client"
+    version: "v1"
+  
+  # Provider-specific configurations (only track_token_timing needed)
+  provider_configs:
+    openai:
+      track_token_timing: true
+    azure:
+      track_token_timing: true
+    anthropic:
+      track_token_timing: true
+    google:
+      track_token_timing: false  # Disable token timing for specific providers
+  
+  # Metrics configuration
+  metric_export_interval: 60
+  histogram_boundaries: [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0]
+  
+  # Tracing configuration
+  trace_sampling_rate: 1.0
+  max_span_attributes: 128
+
+# Memory configuration (for reference)
+memory:
+  working_memory:
+    provider: redis
+    ttl: 86400
+
+# Workflows configuration (for reference)
+workflows:
+  debug_mode: true

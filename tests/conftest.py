@@ -8,8 +8,8 @@ import os
 import pytest
 from unittest.mock import MagicMock
 
-from arshai.core.interfaces import IAgentConfig, IAgentInput
-from arshai.core.interfaces import ILLMConfig, ILLMInput, LLMInputType
+from arshai.core.interfaces import IAgentInput
+from arshai.core.interfaces import ILLMConfig, ILLMInput
 from arshai.core.interfaces import ConversationMemoryType, IMemoryInput, IWorkingMemory, IMemoryManager
 from arshai.core.interfaces import ITool
 
@@ -21,12 +21,9 @@ def test_config_path():
 
 
 @pytest.fixture
-def agent_config():
-    """Create a basic agent configuration."""
-    return IAgentConfig(
-        task_context="You are a helpful assistant for testing",
-        tools=[]
-    )
+def agent_system_prompt():
+    """Create a basic agent system prompt."""
+    return "You are a helpful assistant for testing"
 
 
 @pytest.fixture
@@ -55,8 +52,10 @@ def agent_input():
     """Create a basic agent input for testing."""
     return IAgentInput(
         message="Hello, this is a test message",
-        conversation_id="test-conversation-123",
-        stream=False
+        metadata={
+            "conversation_id": "test-conversation-123",
+            "stream": False
+        }
     )
 
 
@@ -64,11 +63,10 @@ def agent_input():
 def llm_input():
     """Create a basic LLM input for testing."""
     return ILLMInput(
-        input_type=LLMInputType.CHAT_COMPLETION,
         system_prompt="You are a helpful assistant",
         user_message="Hello, this is a test message",
-        tools_list=[],
-        callable_functions={},
+        regular_functions={},
+        background_tasks={},
         structure_type=None
     )
 
@@ -77,6 +75,11 @@ def llm_input():
 def mock_llm():
     """Create a mock LLM for testing."""
     mock = MagicMock()
+    mock.chat.return_value = {
+        "response": "This is a mock response",
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
+    }
+    # Legacy support
     mock.chat_with_tools.return_value = {
         "llm_response": "This is a mock response",
         "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
@@ -124,4 +127,22 @@ def mock_tool():
 @pytest.fixture
 def tool_args():
     """Create basic tool arguments for testing."""
-    return {"param1": "value1"} 
+    return {"param1": "value1"}
+
+
+@pytest.fixture
+def mock_agent_responses():
+    """Create examples of different agent response formats for testing."""
+    return {
+        "simple_string": "Hello, this is a simple response",
+        "dict_with_usage": {
+            "response": "Hello with usage info", 
+            "usage": {"tokens": 15}
+        },
+        "complex_data": {
+            "status": "success",
+            "data": {"results": ["item1", "item2"]},
+            "metadata": {"processed_at": "2024-01-01"}
+        },
+        "streaming": iter(["chunk1", "chunk2", "chunk3"])
+    } 

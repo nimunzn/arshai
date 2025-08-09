@@ -25,7 +25,7 @@ class CompatibilityImporter:
         'src.vector_db': 'arshai.vector_db',
         'src.config': 'arshai.config',
         'src.utils': 'arshai.utils',
-        'src.factories': 'arshai.factories',
+        'src.factories': 'arshai.utils',
         'src.callbacks': 'arshai.callbacks',
         'src.prompts': 'arshai.prompts',
         'src.rerankers': 'arshai.rerankers',

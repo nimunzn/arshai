@@ -17,7 +17,6 @@ from arshai.core.interfaces import ISetting
 from arshai.core.interfaces import IWorkflowOrchestrator, IWorkflowState
 from arshai.core.interfaces import ILLMInput, LLMInputType
 
-from arshai.config.settings import Settings
 from arshai.workflows.node import BaseNode
 from arshai.workflows.workflow_config import WorkflowConfig
 from arshai.workflows.workflow_runner import BaseWorkflowRunner
@@ -293,11 +292,9 @@ async def run_simple_workflow():
     """Run the simple workflow with example messages."""
     print("\n=== Simple Linear Workflow Example ===")
     
-    # Create settings
-    settings = Settings()
-    
+    # Create settings    
     # Create workflow configuration
-    workflow_config = SimpleWorkflowConfig(settings, debug_mode=True)
+    workflow_config = SimpleWorkflowConfig(debug_mode=True)
     
     # Create workflow runner
     runner = BaseWorkflowRunner(workflow_config, debug_mode=True)

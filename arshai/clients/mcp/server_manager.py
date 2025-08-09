@@ -8,7 +8,6 @@ and execution across all configured servers.
 import asyncio
 import logging
 from typing import Dict, List, Any, Optional, Set
-from arshai.core.interfaces.isetting import ISetting
 
 from .config import MCPConfig, MCPServerConfig
 from .base_client import BaseMCPClient
@@ -22,21 +21,27 @@ class MCPServerManager:
     Manages multiple MCP servers and provides unified access to their tools.
     
     This manager handles:
-    - Configuration loading from Settings
+    - Configuration loading and server initialization
     - Connection management for multiple servers
     - Tool discovery across all servers
     - Server health monitoring
     - Graceful error handling and fallback
     """
     
-    def __init__(self, settings: ISetting):
+    def __init__(self, config_dict: Dict[str, Any]):
         """
         Initialize the MCP server manager.
         
         Args:
-            settings: ISetting instance for reading configuration
+            config_dict: Configuration dictionary containing MCP settings
+        
+        Example:
+            # Load from YAML file
+            from arshai.config import load_config
+            config_dict = load_config("config.yaml")
+            manager = MCPServerManager(config_dict)
         """
-        self.settings = settings
+        self.config_dict = config_dict
         self.config: Optional[MCPConfig] = None
         self.clients: Dict[str, BaseMCPClient] = {}
         self._connected_servers: Set[str] = set()
@@ -50,8 +55,8 @@ class MCPServerManager:
             MCPConfigurationError: If configuration is invalid
         """
         try:
-            # Load MCP configuration from settings
-            self.config = MCPConfig.from_settings(self.settings)
+            # Load MCP configuration from config dictionary
+            self.config = MCPConfig.from_dict(self.config_dict)
             
             if not self.config.enabled:
                 logger.info("MCP is disabled in configuration")

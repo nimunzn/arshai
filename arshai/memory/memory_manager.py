@@ -36,16 +36,12 @@ class MemoryManagerService:
         """
         try:
             # Import here to avoid circular import
-            from ..factories.memory_factory import MemoryFactory
-            
-            kwargs = {
-                "ttl": self.working_memory_ttl
-            }
+            from ..utils.memory_utils import create_memory_manager
             
             # Don't pass sensitive data, let components read from environment
-            return MemoryFactory.create_working_memory(
+            return create_memory_manager(
                 provider=self.working_memory_provider,
-                **kwargs
+                ttl=self.working_memory_ttl
             )
         except Exception as e:
             logger.error(f"Failed to initialize working memory manager: {str(e)}")
@@ -53,8 +49,8 @@ class MemoryManagerService:
             logger.info("Falling back to in-memory provider")
             
             # Import again inside exception handler to ensure it's available
-            from ..factories.memory_factory import MemoryFactory
-            return MemoryFactory.create_working_memory(
+            from ..utils.memory_utils import create_memory_manager
+            return create_memory_manager(
                 provider="in_memory",
                 ttl=self.working_memory_ttl
             )

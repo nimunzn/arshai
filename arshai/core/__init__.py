@@ -6,7 +6,6 @@ from arshai.core.interfaces import *
 __all__ = [
     # Re-export all interfaces
     "IAgent",
-    "IAgentConfig", 
     "IAgentInput",
     "IWorkflow",
     "IWorkflowState",

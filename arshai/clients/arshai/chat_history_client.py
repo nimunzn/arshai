@@ -16,7 +16,7 @@ class ChatHistoryClient:
         """Initialize the Chat History client.
         
         Args:
-            settings: Settings containing API configuration
+            header_data: Dictionary containing user authentication data
         """
         self.api_url = os.getenv("FAST_CHAT_URL", "http://localhost:8000")
         self.header_data = header_data

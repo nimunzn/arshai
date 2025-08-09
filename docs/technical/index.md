@@ -79,6 +79,7 @@ graph TB
 - Vector databases for document embedding storage
 - Redis for distributed memory management (optional)
 - HTTP APIs for service integration
+- OpenTelemetry for observability and monitoring
 
 ### Design Patterns
 - Clean Architecture with interface-first design
@@ -86,9 +87,10 @@ graph TB
 - Repository Pattern for data access
 - Dependency Injection for flexible configuration
 - Strategy Pattern for interchangeable algorithms
+- Constructor-based observability integration
 
 ### Infrastructure Components
 - Modular design for flexible deployment options
 - Support for containerization and orchestration
-- Configurable logging and monitoring
+- Built-in observability with metrics, traces, and logging
 - Scalable vector storage with multiple backend options 

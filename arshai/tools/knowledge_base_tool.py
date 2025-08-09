@@ -1,35 +1,75 @@
 from typing import Dict, Any, List, Optional
 from arshai.core.interfaces.itool import ITool
-from arshai.core.interfaces.isetting import ISetting
+from arshai.core.interfaces.ivector_db_client import IVectorDBClient, ICollectionConfig
+from arshai.core.interfaces.iembedding import IEmbedding
 import logging
 import traceback
 
 class KnowledgeBaseRetrievalTool(ITool):
     """Tool for retrieving knowledge from the vector database using both semantic and keyword-based search"""
     
-    def __init__(self, settings: ISetting):
-        self.settings = settings
+    def __init__(self, 
+                 vector_db: IVectorDBClient, 
+                 embedding_model: IEmbedding,
+                 collection_config: ICollectionConfig,
+                 search_limit: int = 3):
+        """
+        Initialize the knowledge base retrieval tool.
+        
+        Args:
+            vector_db: Vector database client for storing/retrieving embeddings
+            embedding_model: Embedding model for converting queries to vectors
+            collection_config: Complete collection configuration including field names and settings
+            search_limit: Maximum number of results to return (default: 3)
+        
+        Example:
+            from arshai.vector_db.milvus_client import MilvusClient
+            from arshai.embeddings.openai_embeddings import OpenAIEmbedding
+            from arshai.core.interfaces.iembedding import EmbeddingConfig
+            from arshai.core.interfaces.ivector_db_client import ICollectionConfig
+            
+            # Create components directly
+            vector_db = MilvusClient(host="localhost", port=19530)
+            
+            embedding_config = EmbeddingConfig(model_name="text-embedding-3-small")
+            embedding_model = OpenAIEmbedding(embedding_config)
+            
+            collection_config = ICollectionConfig(
+                collection_name="knowledge_base",
+                dense_dim=1536,  # OpenAI embedding dimension
+                text_field="content",
+                metadata_field="metadata",
+                is_hybrid=False  # Set to True if using hybrid search
+            )
+            
+            # Create knowledge base tool
+            kb_tool = KnowledgeBaseRetrievalTool(
+                vector_db=vector_db,
+                embedding_model=embedding_model,
+                collection_config=collection_config,
+                search_limit=5
+            )
+        """
+        self.vector_db = vector_db
+        self.embedding_model = embedding_model
+        self.collection_config = collection_config
+        self.search_limit = search_limit
         self.logger = logging.getLogger('KnowledgeBaseRetrievalTool')
         
-        # Log availability of required components
-        if not settings:
-            self.logger.error("Settings not provided")
-            return
-            
-        # Get the vector db client and embedding model from settings
-        self.vector_db, self.collection_config, self.embedding_model = self.settings.create_vector_db()
+        # Validate required components
+        if not vector_db:
+            self.logger.error("Vector database client not provided")
+        if not embedding_model:
+            self.logger.error("Embedding model not provided")
+        if not collection_config:
+            self.logger.error("Collection configuration not provided")
         
-        # Get search parameters from config
-        self.search_limit = self.settings.get("search_limit", 3)
-        
-        self.logger.info(f"search_limit: {self.search_limit}")
-        # Check if components are available
-        if self.vector_db is None:
-            self.logger.error("Vector database client not available")
-        if self.embedding_model is None:
-            self.logger.error("Embedding model not available")
-        if self.collection_config is None:
-            self.logger.error("Collection configuration not available")
+        if vector_db and embedding_model and collection_config:
+            self.logger.info(f"Initialized knowledge base tool - Collection: {collection_config.collection_name}, "
+                           f"Text field: {collection_config.text_field}, "
+                           f"Metadata field: {collection_config.metadata_field}, "
+                           f"Hybrid search: {collection_config.is_hybrid}, "
+                           f"Search limit: {search_limit}")
             
 
     @property

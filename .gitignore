@@ -34,7 +34,7 @@ ENV/
 env.bak/
 venv.bak/
 tests/unit/llms/*.json
-tests/unit/llms/.env.*
+tests/unit/llms/*.env.*
 # IDE
 .idea/
 .vscode/
