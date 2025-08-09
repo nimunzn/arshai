@@ -1,32 +1,42 @@
 from typing import Dict, Any, List, Type, Optional
 from arshai.core.interfaces.iworkflow import IWorkflowConfig, IWorkflowOrchestrator, INode
-from arshai.core.interfaces.isetting import ISetting
 from arshai.workflows.workflow_orchestrator import BaseWorkflowOrchestrator
 from arshai.utils import get_logger
 
 class WorkflowConfig(IWorkflowConfig):
     """Base implementation of workflow configuration.
     
-    This implementation follows the pattern from the previous project where:
+    This implementation provides a foundation for workflow configuration where:
     - The config creates and configures the workflow orchestrator
     - The config defines the workflow structure (nodes and edges)
     - The config provides routing logic for input
+    - Components are injected directly rather than through Settings
     """
     
     def __init__(
         self,
-        settings: ISetting,
         debug_mode: bool = False,
         **kwargs: Any
     ):
         """Initialize workflow configuration.
         
         Args:
-            settings: Application settings to be used for nodes
             debug_mode: Whether to enable debug mode for verbose logging
-            **kwargs: Additional configuration options
+            **kwargs: Additional configuration options that subclasses can use
+        
+        Note:
+            Subclasses should accept their required dependencies directly in their
+            constructors rather than relying on a Settings object. This follows
+            the three-layer architecture where developers have full control over
+            component instantiation.
+        
+        Example:
+            class MyWorkflowConfig(WorkflowConfig):
+                def __init__(self, llm_client: ILLM, memory_manager: IMemoryManager, **kwargs):
+                    super().__init__(**kwargs)
+                    self.llm_client = llm_client
+                    self.memory_manager = memory_manager
         """
-        self.settings = settings
         self.debug_mode = debug_mode
         self._kwargs = kwargs
         self._logger = get_logger(__name__)
