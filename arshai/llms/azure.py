@@ -35,6 +35,41 @@ class AzureClient(ILLM):
         # Initialize the client
         self._client = self._initialize_client()
     
+    def __del__(self):
+        """Cleanup connections when the client is destroyed."""
+        self.close()
+    
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - cleanup connections."""
+        self.close()
+        return False
+    
+    async def __aenter__(self):
+        """Async context manager entry."""
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit - cleanup connections."""
+        self.close()
+        return False
+    
+    def close(self):
+        """Close the Azure OpenAI client and cleanup connections."""
+        try:
+            # Close the underlying httpx client if it exists
+            if hasattr(self._client, '_client') and hasattr(self._client._client, 'close'):
+                self._client._client.close()
+                self.logger.info("Closed Azure OpenAI httpx client")
+            elif hasattr(self._client, 'close'):
+                self._client.close()
+                self.logger.info("Closed Azure OpenAI client")
+        except Exception as e:
+            self.logger.warning(f"Error closing Azure OpenAI client: {e}")
+    
     def _initialize_client(self) -> Any:
         """
         Initialize the Azure OpenAI client with safe HTTP configuration.
