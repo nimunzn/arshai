@@ -1,46 +1,74 @@
 """
-Google Gemini implementation of the LLM interface using google-genai SDK.
-Supports both API key and service account authentication with manual tool orchestration.
-Follows the same interface pattern as the Azure client for consistency.
+Google Gemini implementation using the new BaseLLMClient framework.
+
+Migrated to use structured function orchestration, dual interface support,
+and standardized patterns from the Arshai framework. Serves as the reference
+implementation as mentioned in CLAUDE.md.
 """
 
 import os
-import json
-import logging
-import traceback
-from typing import Dict, Any, Optional, TypeVar, Type, Union, AsyncGenerator, List
+import time
+from typing import Dict, Any, TypeVar, Type, Union, AsyncGenerator, List, Callable
 from google.oauth2 import service_account
 import google.genai as genai
-from google.genai.types import GenerateContentConfig, ThinkingConfig, FunctionDeclaration, Tool, SpeechConfig, Schema, AutomaticFunctionCallingConfig
+from google.genai.types import (
+    GenerateContentConfig,
+    ThinkingConfig,
+    FunctionDeclaration,
+    Tool,
+    SpeechConfig,
+    Schema,
+    AutomaticFunctionCallingConfig,
+)
 
-from arshai.core.interfaces.illm import ILLM, ILLMConfig, ILLMInput, ILLMOutput
+from arshai.core.interfaces.illm import ILLMConfig, ILLMInput
+from arshai.llms.base_llm_client import BaseLLMClient
+from arshai.llms.utils import (
+    is_json_complete,
+    parse_to_structure,
+)
+from arshai.llms.utils.function_execution import FunctionCall, FunctionExecutionInput, StreamingExecutionState
 
-T = TypeVar('T')
+T = TypeVar("T")
+
+# Structure instructions template used across methods
+STRUCTURE_INSTRUCTIONS_TEMPLATE = """
+
+You MUST use structured output formatting as specified.
+Follow the required structure format exactly.
+The response must be properly formatted according to the schema."""
 
 
-class GeminiClient(ILLM):
-    """Google Gemini implementation of the LLM interface"""
+class GeminiClient(BaseLLMClient):
+    """
+    Google Gemini implementation using the new framework architecture.
     
-    def __init__(self, config: ILLMConfig):
+    This client serves as the reference implementation mentioned in CLAUDE.md
+    and demonstrates best practices for the new BaseLLMClient framework.
+    """
+    
+    def __init__(self, config: ILLMConfig, observability_manager=None):
         """
         Initialize the Gemini client with configuration.
-        
+
+        Args:
+            config: Configuration for the LLM
+            observability_manager: Optional observability manager for metrics collection
+
         Supports dual authentication methods:
         1. API Key (simpler): Set GOOGLE_API_KEY environment variable
-        2. Service Account (enterprise): Set GOOGLE_SERVICE_ACCOUNT_PATH, 
-           VERTEXAI_PROJECT_ID, VERTEXAI_LOCATION environment variables
-        
-        Args:
-            config: LLM configuration
+        2. Service Account (enterprise): Set VERTEX_AI_SERVICE_ACCOUNT_PATH,
+           VERTEX_AI_PROJECT_ID, VERTEX_AI_LOCATION environment variables
         """
-        self.config = config
-        self.logger = logging.getLogger(__name__)
-        
-        # Authentication configuration
+        # Gemini-specific configuration
         self.api_key = os.getenv("GOOGLE_API_KEY")
         self.service_account_path = os.getenv("VERTEX_AI_SERVICE_ACCOUNT_PATH")
         self.project_id = os.getenv("VERTEX_AI_PROJECT_ID")
         self.location = os.getenv("VERTEX_AI_LOCATION")
+        self.model_config = getattr(config, "config", {})
+
+        # Initialize base client (handles common setup including observability)
+        super().__init__(config, observability_manager=observability_manager)
         
         # Get model-specific configuration from config dict
         self.model_config = getattr(config, 'config', {})
@@ -91,28 +119,19 @@ class GeminiClient(ILLM):
                 self._client._transport.close()
                 self.logger.info("Closed Gemini client transport")
         except Exception as e:
-            self.logger.warning(f"Error closing Gemini client: {e}")
-    
+            self.logger.warning(f"Error closing Gemini client: {e}")    
     def _initialize_client(self) -> Any:
         """
-        Initialize the Google GenAI client with safe HTTP configuration and authentication detection.
-        
-        Uses SafeHttpClientFactory to create a client with proper timeouts and connection limits
-        to prevent deadlock issues. Falls back gracefully if advanced configuration is not available.
-        
-        Authentication priority:
-        1. API Key (GOOGLE_API_KEY) - Simple authentication
-        2. Service Account - Enterprise authentication using credentials file
+        Initialize the Google GenAI client with safe HTTP configuration.
         
         Returns:
             Google GenAI client instance with safe HTTP configuration
-        
+            
         Raises:
             ValueError: If neither authentication method is properly configured
         """
-        
         try:
-            # Import the safe factory
+            # Import the safe factory for better HTTP handling
             from arshai.clients.utils.safe_http_client import SafeHttpClientFactory
             
             # Try API key authentication first (simpler)
@@ -120,7 +139,6 @@ class GeminiClient(ILLM):
                 self.logger.info("Creating GenAI client with API key and safe HTTP configuration")
                 try:
                     client = SafeHttpClientFactory.create_genai_client(api_key=self.api_key)
-                    # Test the client with a simple call
                     self._test_client_connection(client)
                     self.logger.info("GenAI client created successfully with safe configuration")
                     return client
@@ -128,14 +146,9 @@ class GeminiClient(ILLM):
                     self.logger.error(f"API key authentication with safe config failed: {str(e)}")
                     # Try fallback with basic client
                     self.logger.info("Trying fallback GenAI client with API key")
-                    try:
-                        import google.genai as genai
-                        client = genai.Client(api_key=self.api_key)
-                        self._test_client_connection(client)
-                        return client
-                    except Exception as fallback_error:
-                        self.logger.error(f"Fallback API key authentication failed: {fallback_error}")
-                        raise ValueError(f"Invalid Google API key: {str(e)}")
+                    client = genai.Client(api_key=self.api_key)
+                    self._test_client_connection(client)
+                    return client
             
             # Try service account authentication
             elif self.service_account_path and self.project_id and self.location:
@@ -154,7 +167,6 @@ class GeminiClient(ILLM):
                         credentials=credentials
                     )
                     
-                    # Test the client with a simple call
                     self._test_client_connection(client)
                     self.logger.info("GenAI service account client created successfully with safe configuration")
                     return client
@@ -166,23 +178,18 @@ class GeminiClient(ILLM):
                     self.logger.error(f"Service account authentication with safe config failed: {str(e)}")
                     # Try fallback with basic client
                     self.logger.info("Trying fallback GenAI client with service account")
-                    try:
-                        import google.genai as genai
-                        credentials = service_account.Credentials.from_service_account_file(
-                            self.service_account_path,
-                            scopes=['https://www.googleapis.com/auth/cloud-platform']
-                        )
-                        client = genai.Client(
-                            vertexai=True,
-                            project=self.project_id,
-                            location=self.location,
-                            credentials=credentials
-                        )
-                        self._test_client_connection(client)
-                        return client
-                    except Exception as fallback_error:
-                        self.logger.error(f"Fallback service account authentication failed: {fallback_error}")
-                        raise ValueError(f"Service account authentication failed: {str(e)}")
+                    credentials = service_account.Credentials.from_service_account_file(
+                        self.service_account_path,
+                        scopes=['https://www.googleapis.com/auth/cloud-platform']
+                    )
+                    client = genai.Client(
+                        vertexai=True,
+                        project=self.project_id,
+                        location=self.location,
+                        credentials=credentials
+                    )
+                    self._test_client_connection(client)
+                    return client
             
             else:
                 # No valid authentication method found
@@ -202,7 +209,6 @@ class GeminiClient(ILLM):
             if self.api_key:
                 self.logger.info("Using API key authentication for Gemini (fallback)")
                 try:
-                    import google.genai as genai
                     client = genai.Client(api_key=self.api_key)
                     self._test_client_connection(client)
                     return client
@@ -213,7 +219,6 @@ class GeminiClient(ILLM):
             elif self.service_account_path and self.project_id and self.location:
                 self.logger.info("Using service account authentication for Gemini (fallback)")
                 try:
-                    import google.genai as genai
                     credentials = service_account.Credentials.from_service_account_file(
                         self.service_account_path,
                         scopes=['https://www.googleapis.com/auth/cloud-platform']
@@ -242,748 +247,594 @@ class GeminiClient(ILLM):
                 )
                 self.logger.error(error_msg)
                 raise ValueError(error_msg)
-    
-    def _test_client_connection(self, client) -> None:
+
+    # ========================================================================
+    # PROVIDER-SPECIFIC HELPER METHODS
+    # ========================================================================
+
+    def _accumulate_usage_safely(self, current_usage: Dict[str, Any], accumulated_usage: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Test the client connection with a minimal request.
+        Safely accumulate usage metadata without in-place mutations.
         
         Args:
-            client: The GenAI client to test
+            current_usage: Current usage metadata
+            accumulated_usage: Previously accumulated usage (optional)
         
-        Raises:
-            Exception: If the client connection test fails
+        Returns:
+            New accumulated usage dictionary
         """
+        if accumulated_usage is None:
+            return current_usage
+        
+        return {
+            "input_tokens": accumulated_usage["input_tokens"] + current_usage["input_tokens"],
+            "output_tokens": accumulated_usage["output_tokens"] + current_usage["output_tokens"],
+            "total_tokens": accumulated_usage["total_tokens"] + current_usage["total_tokens"],
+            "thinking_tokens": accumulated_usage["thinking_tokens"] + current_usage["thinking_tokens"],
+            "tool_calling_tokens": accumulated_usage["tool_calling_tokens"] + current_usage["tool_calling_tokens"],
+            "provider": current_usage["provider"],
+            "model": current_usage["model"],
+            "request_id": current_usage["request_id"]
+        }
+
+    def _test_client_connection(self, client) -> None:
+        """Test the client connection with a minimal request."""
         try:
-            # Test with a simple content generation request
             response = client.models.generate_content(
                 model=self.config.model,
                 contents=["Test connection"],
-                config=GenerateContentConfig(
-                    max_output_tokens=1,
-                    temperature=0.0
-                )
+                config=GenerateContentConfig(max_output_tokens=1, temperature=0.0),
             )
             self.logger.info("Gemini client connection test successful")
         except Exception as e:
             raise Exception(f"Client connection test failed: {str(e)}")
-    
-    def _create_structure_function(self, structure_type: Type[T]) -> FunctionDeclaration:
+
+    def _prepare_base_context(self, input: ILLMInput) -> str:
+        """Build base conversation context from system prompt and user message."""
+        return f"{input.system_prompt}\n\nUser: {input.user_message}"
+
+    def _convert_callables_to_provider_format(self, functions: Dict[str, Callable]) -> List[FunctionDeclaration]:
         """
-        Create a function declaration from the structure type for Gemini function calling.
-        (Legacy method - use _create_response_schema for better structured output)
+        Convert python callables to Gemini FunctionDeclaration format.
+        Pure conversion without execution metadata.
         
         Args:
-            structure_type: Pydantic model class for structured output
-            
+            functions: Dictionary of callable functions to convert
+        
         Returns:
-            FunctionDeclaration compatible with Gemini
+            List of Gemini FunctionDeclaration objects
         """
-        schema = structure_type.model_json_schema()
+        gemini_declarations = []
         
-        return FunctionDeclaration(
-            name=structure_type.__name__.lower(),
-            description=structure_type.__doc__ or f"Create a {structure_type.__name__} response",
-            parameters=schema
-        )
-    
-    def _create_response_schema(self, structure_type: Type[T]) -> Dict[str, Any]:
-        """
-        Create a response schema from the structure type for Gemini structured output.
-        This is the preferred method over function calling for structured output.
+        # Handle callable Python functions
+        for name, callable_func in functions.items():
+            try:
+                # Use Gemini SDK's auto-generation from callable
+                declaration = FunctionDeclaration.from_callable(
+                    callable=callable_func, 
+                    client=self._client
+                )
+                
+                # Get original description and check if it's a background task
+                original_description = declaration.description or callable_func.__doc__ or name
+                is_background_task = original_description.startswith("BACKGROUND TASK:")
+                
+                # Create enhanced declaration (keeping original description for background tasks)
+                enhanced_declaration = FunctionDeclaration(
+                    name=declaration.name,
+                    description=original_description,
+                    parameters=declaration.parameters
+                )
+                
+                gemini_declarations.append(enhanced_declaration)
+                self.logger.debug(f"Auto-generated declaration for {'background task' if is_background_task else 'function'}: {name}")
+                
+            except Exception as e:
+                self.logger.warning(f"Failed to auto-generate declaration for function {name}: {str(e)}")
+                # Fallback: create basic declaration
+                original_description = callable_func.__doc__ or name
+                        
+                gemini_declarations.append(
+                    FunctionDeclaration(
+                        name=name,
+                        description=original_description,
+                        parameters={"type": "object", "properties": {}, "required": []},
+                    )
+                )
         
-        Args:
-            structure_type: Pydantic model class for structured output
+        return gemini_declarations
+
+    def _create_generation_config(self, structure_type: Type[T] = None, tools=None) -> GenerateContentConfig:
+        """Create generation config from model config dict."""
+        # Start with base temperature from main config
+        config_dict = {"temperature": self.config.temperature}
+
+        # Process all model config parameters and convert nested dicts to proper classes
+        for key, value in self.model_config.items():
+            if key == "thinking_config" and isinstance(value, dict):
+                config_dict["thinking_config"] = ThinkingConfig(**value)
+            elif key == "speech_config" and isinstance(value, dict):
+                config_dict["speech_config"] = SpeechConfig(**value)
+            elif key == "response_schema" and isinstance(value, dict):
+                config_dict["response_schema"] = Schema(**value)
+            elif key == "response_json_schema" and isinstance(value, dict):
+                config_dict["response_json_schema"] = value
+            else:
+                config_dict[key] = value
+
+        # Add structured output configuration if requested
+        if structure_type:
+            config_dict["response_mime_type"] = "application/json"
             
-        Returns:
-            Schema dict compatible with GenerationConfig.responseSchema
+            # Create response schema from Pydantic model
+            schema_dict = structure_type.model_json_schema()
+            
+            try:
+                config_dict["response_schema"] = Schema(**schema_dict)
+            except Exception:
+                config_dict["response_schema"] = schema_dict
+
+        # Add tools to config if provided and disable automatic function calling for manual orchestration
+        if tools:
+            config_dict["tools"] = tools
+            config_dict["automatic_function_calling"] = AutomaticFunctionCallingConfig(disable=True)
+            self.logger.debug("Disabled automatic function calling for manual orchestration")
+
+        return GenerateContentConfig(**config_dict)
+
+    def _process_function_calls_for_orchestrator(self, function_calls, input: ILLMInput) -> tuple:
         """
-        return structure_type.model_json_schema()
-    
-    def _should_use_response_schema(self, input: ILLMInput) -> bool:
-        """
-        Determine whether to use responseSchema (preferred) or function calling for structured output.
+        Process function calls and prepare them for the orchestrator using object-based approach.
         
         Args:
+            function_calls: Function calls from Gemini response
             input: The LLM input
             
         Returns:
-            True if should use responseSchema, False if should use function calling
+            Tuple of (function_calls_list, structured_response)
         """
-        # Use responseSchema if:
-        # 1. We have a structure_type (need structured output)
-        # 2. We don't have tools (no function calling needed)
-        return input.structure_type is not None and not input.tools_list
-    
-    def _convert_tools_to_gemini_format(self, tools_list: List[Dict]) -> List[FunctionDeclaration]:
-        """
-        Convert tools list to Gemini FunctionDeclaration format.
+        function_calls_list = []
+        structured_response = None
         
-        Args:
-            tools_list: List of tool definitions
+        for i, func_call in enumerate(function_calls):
+            function_name = func_call.name
+            function_args = dict(func_call.args) if hasattr(func_call, 'args') and func_call.args else {}
             
-        Returns:
-            List of FunctionDeclaration objects
-        """
-        gemini_tools = []
-        for tool in tools_list:
-            gemini_tools.append(FunctionDeclaration(
-                name=tool.get('name'),
-                description=tool.get('description', ''),
-                parameters=tool.get('parameters', {})
-            ))
-        return gemini_tools
-    
-    def _create_generation_config(self, structure_type: Type[T] = None, use_response_schema: bool = False, tools=None) -> GenerateContentConfig:
-        """
-        Create generation config from model config dict.
-        Converts nested dict configs to proper class objects based on Google GenAI schema.
-        
-        Args:
-            structure_type: Optional Pydantic model for structured output
-            use_response_schema: Whether to use responseSchema instead of function calling
-            tools: Optional list of tools to include in config
-        
-        Returns:
-            GenerateContentConfig with all specified settings and proper class conversions
-        """
-        # Start with base temperature from main config
-        config_dict = {
-            'temperature': self.config.temperature
-        }
-        
-        # Process all model config parameters and convert nested dicts to proper classes
-        for key, value in self.model_config.items():
-            if key == 'thinking_config' and isinstance(value, dict):
-                # Convert thinking_config dict to ThinkingConfig object
-                config_dict['thinking_config'] = ThinkingConfig(**value)
-            elif key == 'speech_config' and isinstance(value, dict):
-                # Convert speech_config dict to SpeechConfig object
-                config_dict['speech_config'] = SpeechConfig(**value)
-            elif key == 'response_schema' and isinstance(value, dict):
-                # Convert response_schema dict to Schema object
-                config_dict['response_schema'] = Schema(**value)
-            elif key == 'response_json_schema' and isinstance(value, dict):
-                # Keep as dict for response_json_schema (it expects a dict/object)
-                config_dict['response_json_schema'] = value
+            # Create unique call_id to track individual function calls
+            call_id = f"{function_name}_{i}"
+            
+            # Check if it's a background task
+            if function_name in (input.background_tasks or {}):
+                function_calls_list.append(FunctionCall(
+                    name=function_name,
+                    args=function_args,
+                    call_id=call_id,
+                    is_background=True
+                ))
+            # Check if it's a regular function
+            elif function_name in (input.regular_functions or {}):
+                function_calls_list.append(FunctionCall(
+                    name=function_name,
+                    args=function_args,
+                    call_id=call_id,
+                    is_background=False
+                ))
             else:
-                # For all other parameters (primitive types, arrays, etc.)
-                # stopSequences, responseMimeType, responseModalities, candidateCount,
-                # maxOutputTokens, topP, topK, seed, presencePenalty, frequencyPenalty,
-                # responseLogprobs, logprobs, enableEnhancedCivicAnswers, mediaResolution
-                config_dict[key] = value
+                self.logger.warning(f"Function {function_name} not found in available functions or background tasks")
         
-        # Add structured output configuration if requested
-        if structure_type and use_response_schema:
-            # Use responseSchema approach (preferred for structured output)
-            config_dict['response_schema'] = Schema(**self._create_response_schema(structure_type))
-            # Ensure JSON MIME type for structured output
-            if 'response_mime_type' not in config_dict:
-                config_dict['response_mime_type'] = 'application/json'
+        return function_calls_list, structured_response
+
+    def _add_function_results_to_contents(self, execution_result: Dict, contents: List[str]) -> None:
+        """Add function execution results to contents list in Gemini format."""
+        # Add function results as context
+        for result in execution_result.get('regular_results', []):
+            contents.append(f"Function '{result['name']}' called with arguments {result['args']} returned: {result['result']}")
         
-        # Add tools to config if provided and disable automatic function calling for manual orchestration
-        if tools:
-            config_dict['tools'] = tools
-            # Disable automatic function calling to prevent conflicts with manual orchestration
-            config_dict['automatic_function_calling'] = AutomaticFunctionCallingConfig(disable=True)
-            self.logger.info("Disabled automatic function calling for manual orchestration")
+        # Add background task notifications
+        for bg_message in execution_result.get('background_initiated', []):
+            contents.append(f"Background task initiated: {bg_message}")
         
-        # Create the generation config with properly converted objects
-        return GenerateContentConfig(**config_dict)
-    
-    def _parse_to_structure(self, content: Union[str, dict], structure_type: Type[T]) -> T:
+        # Add completion message if we have results
+        if execution_result.get('regular_results'):
+            completion_msg = f"All {len(execution_result['regular_results'])} function(s) completed. Please provide your response based on these results."
+            contents.append(completion_msg)
+
+    def _extract_text_from_response(self, response) -> str:
         """
-        Parse response content into the specified structure type.
+        Extract text content from Gemini response, handling different response formats.
         
         Args:
-            content: Response content to parse
-            structure_type: Target Pydantic model class
+            response: Gemini API response object
             
         Returns:
-            Instance of the structure type
+            Extracted text content or empty string if not found
         """
-        if isinstance(content, str):
-            try:
-                parsed_content = json.loads(content)
-            except json.JSONDecodeError as e:
-                raise ValueError(f"Failed to parse JSON response: {str(e)}")
+        # Try direct text access first
+        if hasattr(response, "text") and response.text:
+            return response.text
+        
+        # Try candidates structure
+        if hasattr(response, "candidates") and response.candidates:
+            candidate = response.candidates[0]
+            if hasattr(candidate, "content") and candidate.content:
+                if hasattr(candidate.content, "parts") and candidate.content.parts:
+                    part = candidate.content.parts[0]
+                    if hasattr(part, 'text') and part.text:
+                        return part.text
+        
+        return ""
+
+    # ========================================================================
+    # FRAMEWORK-REQUIRED ABSTRACT METHODS
+    # ========================================================================
+
+    async def _chat_simple(self, input: ILLMInput) -> Dict[str, Any]:
+        """Handle simple chat without tools or background tasks."""
+        # Build base context
+        contents = [self._prepare_base_context(input)]
+        
+        # Add structured output instructions if needed
+        if input.structure_type:
+            contents[0] += STRUCTURE_INSTRUCTIONS_TEMPLATE
+        
+        # Generate content without tools
+        response = self._client.models.generate_content(
+            model=self.config.model,
+            contents=contents,
+            config=self._create_generation_config(input.structure_type),
+        )
+        self.logger.debug(f"Response: {response}")
+
+        # Process usage metadata
+        usage = self._standardize_usage_metadata(
+            response.usage_metadata if hasattr(response, 'usage_metadata') else None,
+            self._get_provider_name(),
+            self.config.model,
+            getattr(response, 'id', None)
+        )
+
+        # Extract text from response using robust method
+        response_text = self._extract_text_from_response(response)
+        
+        # Handle structured output
+        if input.structure_type:
+            if response_text:
+                try:
+                    final_response = parse_to_structure(response_text, input.structure_type)
+                    return {"llm_response": final_response, "usage": usage}
+                except ValueError as e:
+                    return {"llm_response": f"Failed to parse structured response: {str(e)}", "usage": usage}
+        
+        # Handle regular text response
+        if response_text:
+            return {"llm_response": response_text, "usage": usage}
         else:
-            parsed_content = content
+            return {"llm_response": "No response generated", "usage": usage}
+
+    async def _chat_with_functions(self, input: ILLMInput) -> Dict[str, Any]:
+        """Handle complex chat with tools and/or background tasks."""
+        # Build base context and prepare tools
+        contents = [self._prepare_base_context(input)]
         
-        try:
-            return structure_type(**parsed_content)
-        except Exception as e:
-            raise ValueError(f"Failed to create {structure_type.__name__} from response: {str(e)}")
-    
-    async def chat_with_tools(self, input: ILLMInput) -> Union[ILLMOutput, str]:
-        """
-        Process a chat with tools message using manual tool orchestration.
+        # Prepare tools for Gemini
+        gemini_tools = []
         
-        Args:
-            input: The LLM input containing system prompt, user message, tools, and options
-            
-        Returns:
-            Dict containing the LLM response and usage information
-        """
-        try:
-            # Build conversation messages (Gemini uses content format)
-            contents = [f"{input.system_prompt}\n\nUser: {input.user_message}"]
-            
-            # Determine approach for structured output
-            use_response_schema = self._should_use_response_schema(input)
-            
-            # Prepare tools for Gemini (only if not using responseSchema)
-            gemini_tools = []
-            if input.tools_list:
-                gemini_tools.extend(self._convert_tools_to_gemini_format(input.tools_list))
-            
-            # Add structure function if using function calling approach
-            if input.structure_type and not use_response_schema:
-                structure_function = self._create_structure_function(input.structure_type)
-                gemini_tools.append(structure_function)
-                contents[0] += f"\n\nYou MUST use the {input.structure_type.__name__.lower()} function to format your response."
-            elif input.structure_type and use_response_schema:
-                # For responseSchema approach, just add instruction for JSON
-                contents[0] += f"\n\nProvide your response as structured JSON matching the expected format."
-            
-            current_turn = 0
-            final_response = None
-            accumulated_usage = None
-            
-            while current_turn < input.max_turns:
-                self.logger.info(f"Current turn: {current_turn}")
-                
-                try:
-                    # Determine whether to use responseSchema or function calling
-                    use_response_schema = self._should_use_response_schema(input)
-                    
-                    # Create tool objects for Gemini
-                    tools = [Tool(function_declarations=gemini_tools)] if gemini_tools else None
-                    
-                    # Prepare generation config from model config dict with tools
-                    generation_config = self._create_generation_config(input.structure_type, use_response_schema, tools)
-                    
-                    # Generate content with tools (manual mode - no automatic execution)
-                    response = self._client.models.generate_content(
-                        model=self.config.model,
-                        contents=contents,
-                        config=generation_config
-                    )
-                    
-                    # Process usage metadata
-                    if hasattr(response, 'usage_metadata') and response.usage_metadata:
-                        current_usage = self._process_usage_metadata(response.usage_metadata)
-                        if accumulated_usage is None:
-                            accumulated_usage = current_usage
-                        else:
-                            # Accumulate usage metrics (standardized format)
-                            accumulated_usage['total_tokens'] += current_usage.get('total_tokens', 0)
-                            accumulated_usage['prompt_tokens'] += current_usage.get('prompt_tokens', 0)
-                            accumulated_usage['completion_tokens'] += current_usage.get('completion_tokens', 0)
-                    
-                    # Process response - handle both responseSchema and function calling approaches
-                    if hasattr(response, 'candidates') and response.candidates:
-                        candidate = response.candidates[0]
-                        
-                        # Handle responseSchema approach first (direct text response)
-                        if use_response_schema and input.structure_type:
-                            if hasattr(candidate, 'content') and candidate.content:
-                                if hasattr(candidate.content, 'parts'):
-                                    for part in candidate.content.parts:
-                                        if hasattr(part, 'text') and part.text:
-                                            try:
-                                                # Parse JSON response directly
-                                                final_response = self._parse_to_structure(part.text, input.structure_type)
-                                                break
-                                            except ValueError as e:
-                                                self.logger.warning(f"Failed to parse responseSchema output: {str(e)}")
-                                                continue
-                        
-                        # Check for function calls - only if not using responseSchema
-                        elif hasattr(candidate, 'function_calls') and candidate.function_calls:
-                            function_call = candidate.function_calls[0]
-                            function_name = function_call.name
-                            function_args = dict(function_call.args) if function_call.args else {}
-                            
-                            self.logger.info(f"Function name: {function_name}")
-                            
-                            # If it's the structure function, validate and create the structured response
-                            if input.structure_type and function_name == input.structure_type.__name__.lower():
-                                final_response = input.structure_type(**function_args)
-                                break
-                            
-                            # Handle other tool functions manually
-                            if function_name in input.callable_functions:
-                                # Execute the function manually
-                                role, function_response = await input.callable_functions[function_name](**function_args)
-                                self.logger.debug(f"Function response: {function_response}")
-                                
-                                # Add function response to conversation
-                                contents.append(f"Function {function_name} result: {function_response}")
-                            else:
-                                raise ValueError(f"Function {function_name} not found in available functions")
-                        
-                        # Check for text response (no function calls)
-                        elif hasattr(candidate, 'content') and candidate.content:
-                            if hasattr(candidate.content, 'parts'):
-                                for part in candidate.content.parts:
-                                    if hasattr(part, 'text') and part.text:
-                                        if not input.structure_type:
-                                            return {"llm_response": part.text, "usage": accumulated_usage}
-                                        else:
-                                            # Try to parse as structured response
-                                            try:
-                                                final_response = self._parse_to_structure(part.text, input.structure_type)
-                                                break
-                                            except ValueError as e:
-                                                # Continue if parsing fails
-                                                self.logger.warning(f"Structured parsing failed: {str(e)}")
-                                                contents.append(part.text)
-                    
-                    current_turn += 1
-                    
-                except Exception as e:
-                    self.logger.error(f"Error in Gemini chat_with_tools turn {current_turn}: {str(e)}")
-                    self.logger.error(traceback.format_exc())
-                    return {"llm_response": f"An error occurred: {str(e)}", "usage": accumulated_usage}
-            
-            # Handle final response or max turns
-            if final_response is None:
-                if input.structure_type:
-                    try:
-                        # Make one final attempt to get structured response
-                        contents.append(f"You must provide a final response using the {input.structure_type.__name__.lower()} function.")
-                        
-                        # Create tools for final attempt
-                        final_tools = [Tool(function_declarations=[self._create_structure_function(input.structure_type)])]
-                        final_config = self._create_generation_config(input.structure_type, use_response_schema, final_tools)
-                        
-                        response = self._client.models.generate_content(
-                            model=self.config.model,
-                            contents=contents,
-                            config=final_config
-                        )
-                        
-                        # Accumulate usage info from final call
-                        if hasattr(response, 'usage_metadata') and response.usage_metadata:
-                            current_usage = self._process_usage_metadata(response.usage_metadata)
-                            if accumulated_usage is None:
-                                accumulated_usage = current_usage
-                            else:
-                                accumulated_usage['total_tokens'] += current_usage.get('total_tokens', 0)
-                                accumulated_usage['prompt_tokens'] += current_usage.get('prompt_tokens', 0)
-                                accumulated_usage['completion_tokens'] += current_usage.get('completion_tokens', 0)
-                        
-                        if hasattr(response, 'candidates') and response.candidates:
-                            candidate = response.candidates[0]
-                            if hasattr(candidate, 'function_calls') and candidate.function_calls:
-                                function_call = candidate.function_calls[0]
-                                function_args = dict(function_call.args) if function_call.args else {}
-                                final_response = input.structure_type(**function_args)
-                            else:
-                                return {"llm_response": "Failed to generate structured response", "usage": accumulated_usage}
-                    except Exception as e:
-                        return {"llm_response": f"Failed to generate structured response: {str(e)}", "usage": accumulated_usage}
-                else:
-                    return {"llm_response": "Maximum number of function calling turns reached", "usage": accumulated_usage}
-            
-            # Return structured response with usage
-            return {"llm_response": final_response, "usage": accumulated_usage}
-                
-        except Exception as e:
-            self.logger.error(f"Error in Gemini chat_with_tools: {str(e)}")
-            self.logger.error(traceback.format_exc())
-            return {"llm_response": f"An error occurred: {str(e)}", "usage": None}
-    
-    async def stream_with_tools(
-        self,
-        input: ILLMInput
-    ) -> AsyncGenerator[Dict[str, Any], None]:
-        """
-        Process a streaming chat with tools message using manual tool orchestration.
-        Uses Google GenAI SDK direct accessors (chunk.text, chunk.function_calls).
+        # Convert all functions using the new unified approach
+        all_functions = {}
+        if input.regular_functions:
+            all_functions.update(input.regular_functions)
+        if input.background_tasks:
+            all_functions.update(input.background_tasks)
         
-        Args:
-            input: The LLM input containing system prompt, user message, tools, and options
-            
-        Yields:
-            Dict containing streaming response chunks and usage information
-        """
-        try:
-            # Build conversation contents (Gemini format)
-            contents = [f"{input.system_prompt}\n\nUser: {input.user_message}"]
-            
-            # Prepare tools for Gemini
-            gemini_tools = []
-            if input.tools_list:
-                gemini_tools.extend(self._convert_tools_to_gemini_format(input.tools_list))
-            
-            # Add structure function if provided
-            if input.structure_type:
-                structure_function = self._create_structure_function(input.structure_type)
-                gemini_tools.append(structure_function)
-                contents[0] += f"\n\nYou MUST use the {input.structure_type.__name__.lower()} function to format your response."
-            
-            current_turn = 0
-            final_response = None
-            accumulated_usage = None
-            is_finished = False
-            
-            while current_turn < 5: #input.max_turns:
-                if is_finished:
-                    break
-                    
-                self.logger.info(f"Current turn: {current_turn}")
-                
-                try:
-                    # Determine whether to use responseSchema or function calling
-                    use_response_schema = self._should_use_response_schema(input)
-                    
-                    # Create tool objects for Gemini
-                    tools = [Tool(function_declarations=gemini_tools)] if gemini_tools else None
-                    
-                    # Prepare generation config from model config dict with tools
-                    generation_config = self._create_generation_config(input.structure_type, use_response_schema, tools)
-                    
-                    # Generate streaming content with tools (manual mode)
-                    stream = self._client.models.generate_content_stream(
-                        model=self.config.model,
-                        contents=contents,
-                        config=generation_config
-                    )
-                    self.logger.info(f"Stream: {stream}")
-                    collected_content = {"text": "", "function_calls": []}
-                    chunk_count = 0
-                    
-                    self.logger.info(f"Starting stream processing for turn {current_turn}")
-                    
-                    # Process streaming response
-                    for chunk in stream:
-                        chunk_count += 1
-                        self.logger.debug(f"Processing chunk {chunk_count} in turn {current_turn}")
-                        
-                        # Log chunk structure for debugging
-                        if hasattr(chunk, 'candidates'):
-                            self.logger.debug(f"Chunk has {len(chunk.candidates) if chunk.candidates else 0} candidates")
-                        
-                        if hasattr(chunk, 'usage_metadata'):
-                            self.logger.debug(f"Chunk has usage metadata: {chunk.usage_metadata is not None}")
-                        
-                        # Debug: Log chunk attributes
-                        chunk_attrs = [attr for attr in dir(chunk) if not attr.startswith('_')]
-                        self.logger.debug(f"Chunk attributes: {chunk_attrs}")
-                        
-                        # Check if chunk has direct text access (Google GenAI SDK standard approach)
-                        if hasattr(chunk, 'text') and chunk.text:
-                            chunk_text = chunk.text
-                            self.logger.debug(f"Direct chunk.text: '{chunk_text}'")
-                            collected_content["text"] += chunk_text
-                            self.logger.info(f"Turn {current_turn}: Collected text via direct access: '{chunk_text[:100]}{'...' if len(chunk_text) > 100 else ''}'")
-                            
-                            # Stream content if no structure type required
-                            if not input.structure_type:
-                                yield {"llm_response": chunk_text}
-                            else:
-                                # Check if JSON is complete for structured response
-                                is_complete, fixed_json = self._is_json_complete(collected_content["text"])
-                                if is_complete:
-                                    try:
-                                        final_response = self._parse_to_structure(fixed_json, input.structure_type)
-                                        yield {"llm_response": final_response}
-                                        is_finished = True
-                                        break
-                                    except ValueError:
-                                        continue
-                        
-                        # Check for direct function calls access (Google GenAI SDK standard approach)
-                        if hasattr(chunk, 'function_calls') and chunk.function_calls:
-                            self.logger.info(f"Turn {current_turn}: Found {len(chunk.function_calls)} function calls via direct access")
-                            for function_call in chunk.function_calls:
-                                self.logger.info(f"Turn {current_turn}: Direct function call - {function_call.name}")
-                                collected_content["function_calls"].append(function_call)
-                        
-                        # Handle usage metadata
-                        if hasattr(chunk, 'usage_metadata') and chunk.usage_metadata:
-                            current_usage = self._process_usage_metadata(chunk.usage_metadata)
-                            if accumulated_usage is None:
-                                accumulated_usage = current_usage
-                            else:
-                                accumulated_usage['total_tokens'] += current_usage.get('total_tokens', 0)
-                                accumulated_usage['prompt_tokens'] += current_usage.get('prompt_tokens', 0)
-                                accumulated_usage['completion_tokens'] += current_usage.get('completion_tokens', 0)
-                    
-                    self.logger.info(f"Turn {current_turn}: Stream ended. Processed {chunk_count} chunks. Function calls collected: {len(collected_content['function_calls'])}, Text collected: {len(collected_content['text'])} chars")
-                    
-                    # Process collected function calls manually
-                    if collected_content["function_calls"]:
-                        self.logger.info(f"Turn {current_turn}: Processing {len(collected_content['function_calls'])} collected function calls")
-                        for function_call in collected_content["function_calls"]:
-                            function_name = function_call.name
-                            function_args = dict(function_call.args) if function_call.args else {}
-                            
-                            self.logger.info(f"Function name: {function_name}")
-                            
-                            # Handle structure function
-                            if input.structure_type and function_name == input.structure_type.__name__.lower():
-                                final_response = input.structure_type(**function_args)
-                                yield {"llm_response": final_response}
-                                is_finished = True
-                                break
-                            
-                            # Handle other tool functions manually
-                            elif function_name in input.callable_functions:
-                                role, function_response = await input.callable_functions[function_name](**function_args)
-                                self.logger.debug(f"Function {function_name} response: {function_response}")
-                                
-                                # Add function response to conversation
-                                contents.append(f"Function {function_name} result: {function_response}")
-                                self.logger.info(f"Turn {current_turn}: Added function response, starting new turn")
-                                break  # Break to start new turn
-                            else:
-                                raise ValueError(f"Function {function_name} not found in available functions")
-                    
-                    # Handle text-only response
-                    elif collected_content["text"] and not input.structure_type:
-                        self.logger.info(f"Turn {current_turn}: Text-only response, finishing")
-                        yield {"llm_response": collected_content["text"]}
-                        is_finished = True
-                    
-                    # Only increment turn if we're not finished and continuing
-                    if not is_finished:
-                        current_turn += 1
-                        self.logger.info(f"Turn {current_turn}: Continuing, incremented turn to {current_turn}")
-                    
-                except Exception as e:
-                    self.logger.error(f"Error in Gemini stream_with_tools turn {current_turn}: {str(e)}")
-                    self.logger.error(traceback.format_exc())
-                    yield {"llm_response": f"An error occurred: {str(e)}", "usage": accumulated_usage}
-                    return
-            
-            # Final usage yield
-            self.logger.info(f"Stream completed: is_finished={is_finished}, current_turn={current_turn}, max_turns={input.max_turns}")
-            yield {"llm_response": None, "usage": accumulated_usage}
-            
-            if current_turn >= input.max_turns:
-                self.logger.warning(f"Maximum turns reached: {current_turn} >= {input.max_turns}")
-                yield {"llm_response": "Maximum number of function calling turns reached", "usage": accumulated_usage}
-                
-        except Exception as e:
-            self.logger.error(f"Error in Gemini stream_with_tools: {str(e)}")
-            self.logger.error(traceback.format_exc())
-            yield {"llm_response": f"An error occurred: {str(e)}", "usage": None}
-    
-    def chat_completion(self, input: ILLMInput) -> Union[ILLMOutput, str]:
-        """
-        Process a chat completion message using the Gemini API.
+        if all_functions:
+            gemini_tools.extend(self._convert_callables_to_provider_format(all_functions))
         
-        Args:
-            input: The LLM input containing system prompt, user message, and options
+        # Note: Background tasks are now included in the unified conversion above
+        
+        # Multi-turn conversation for function calling
+        current_turn = 0
+        accumulated_usage = None
+        
+        while current_turn < input.max_turns:
+            self.logger.info(f"Function calling turn: {current_turn}")
             
-        Returns:
-            Dict containing the LLM response and usage information
-        """
-        try:
-            if input.structure_type:
-                # Create structure function for forced structured response
-                structure_function = self._create_structure_function(input.structure_type)
+            try:
+                start_time = time.time()
                 
-                contents = [f"{input.system_prompt}\n\nUser: {input.user_message}"]
-                contents[0] += f"\n\nYou MUST use the {input.structure_type.__name__.lower()} function to format your response."
+                # Create tool objects for Gemini
+                tools = [Tool(function_declarations=gemini_tools)] if gemini_tools else None
                 
-                # Create tools for structured response
-                tools = [Tool(function_declarations=[structure_function])]
-                
+                # Generate content with tools (manual mode - no automatic execution)
                 response = self._client.models.generate_content(
                     model=self.config.model,
                     contents=contents,
-                    config=self._create_generation_config(input.structure_type, self._should_use_response_schema(input), tools)
+                    config=self._create_generation_config(input.structure_type, tools),
                 )
+                self.logger.info(f"Response time: {time.time() - start_time:.2f}s")
                 
-                # Get usage info
-                usage = None
-                if hasattr(response, 'usage_metadata') and response.usage_metadata:
-                    usage = self._process_usage_metadata(response.usage_metadata)
+                # Process usage metadata using framework standardization
+                if hasattr(response, "usage_metadata") and response.usage_metadata:
+                    current_usage = self._standardize_usage_metadata(
+                        response.usage_metadata, self._get_provider_name(), self.config.model, getattr(response, 'id', None)
+                    )
+                    accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
                 
-                # Process function call response
-                if hasattr(response, 'candidates') and response.candidates:
-                    candidate = response.candidates[0]
-                    if hasattr(candidate, 'function_calls') and candidate.function_calls:
-                        function_call = candidate.function_calls[0]
-                        function_args = dict(function_call.args) if function_call.args else {}
-                        final_structure = input.structure_type(**function_args)
-                        return {"llm_response": final_structure, "usage": usage}
-                    else:
-                        raise ValueError("Model did not provide structured response")
-            
-            # Simple completion without structure
-            contents = [f"{input.system_prompt}\n\nUser: {input.user_message}"]
-            
-            response = self._client.models.generate_content(
-                model=self.config.model,
-                contents=contents,
-                config=self._create_generation_config(input.structure_type, self._should_use_response_schema(input))
-            )
-            
-            # Extract usage if available
-            usage = None
-            if hasattr(response, 'usage_metadata') and response.usage_metadata:
-                usage = self._process_usage_metadata(response.usage_metadata)
-            
-            # Extract response text
-            if hasattr(response, 'text') and response.text:
-                return {"llm_response": response.text, "usage": usage}
-            else:
-                return {"llm_response": "No response generated", "usage": usage}
-                
-        except Exception as e:
-            self.logger.error(f"Error in Gemini chat_completion: {str(e)}")
-            self.logger.error(traceback.format_exc())
-            return {"llm_response": f"An error occurred: {str(e)}", "usage": None}
-
-    async def stream_completion(
-        self,
-        input: ILLMInput
-    ) -> AsyncGenerator[Dict[str, Any], None]:
-        """Stream completion responses with optional structure support (Gemini implementation)"""
-        try:
-            # Track usage and complete content
-            usage = None
-            complete_content = ""
-            
-            # Create contents for Gemini
-            contents = [f"{input.system_prompt}\n\nUser: {input.user_message}"]
-            
-            if input.structure_type:
-                # Create structure function
-                structure_function = self._create_structure_function(input.structure_type)
-                
-                # Add instruction to use structure function
-                contents[0] += f"\n\nYou MUST use the {input.structure_type.__name__.lower()} function to format your response."
-                
-                # Create tools for structured response
-                tools = [Tool(function_declarations=[structure_function])]
-                
-                # Create the stream
-                stream = self._client.models.generate_content_stream(
-                    model=self.config.model,
-                    contents=contents,
-                    config=self._create_generation_config(input.structure_type, self._should_use_response_schema(input), tools)
-                )
-
-                collected_function_call = {"name": "", "args": {}}
-                
-                # Process the stream
-                for chunk in stream:
-                    # Handle usage metadata
-                    if hasattr(chunk, 'usage_metadata') and chunk.usage_metadata:
-                        usage = self._process_usage_metadata(chunk.usage_metadata)
+                # Check for function calls
+                if hasattr(response, "function_calls") and response.function_calls:
+                    self.logger.info(f"Turn {current_turn}: Found {len(response.function_calls)} function calls")
                     
-                    if hasattr(chunk, 'candidates') and chunk.candidates:
-                        candidate = chunk.candidates[0]
-                        
-                        # Handle function call
-                        if hasattr(candidate, 'function_calls') and candidate.function_calls:
-                            function_call = candidate.function_calls[0]
-                            collected_function_call["name"] = function_call.name
-                            collected_function_call["args"] = dict(function_call.args) if function_call.args else {}
-                            
-                            try:
-                                # Create structured response
-                                yield {"llm_response": input.structure_type(**collected_function_call["args"])}
-                            except (TypeError, ValueError) as e:
-                                self.logger.warning(f"Failed to create structured response: {str(e)}")
-                                continue
-                
-                # Final yield with usage
-                if collected_function_call["args"]:
-                    try:
-                        yield {"llm_response": input.structure_type(**collected_function_call["args"]), "usage": usage}
-                    except (TypeError, ValueError):
-                        pass
-            else:
-                # Simple unstructured completion
-                stream = self._client.models.generate_content_stream(
-                    model=self.config.model,
-                    contents=contents,
-                    config=self._create_generation_config(input.structure_type, self._should_use_response_schema(input))
-                )
-
-                for chunk in stream:
-                    # Handle usage metadata
-                    if hasattr(chunk, 'usage_metadata') and chunk.usage_metadata:
-                        usage = self._process_usage_metadata(chunk.usage_metadata)
+                    # Process function calls for orchestrator
+                    function_calls_list, structured_response = self._process_function_calls_for_orchestrator(response.function_calls, input)
                     
-                    if hasattr(chunk, 'candidates') and chunk.candidates:
-                        candidate = chunk.candidates[0]
+                    # If we got a structured response, return it immediately
+                    if structured_response is not None:
+                        self.logger.info(f"Turn {current_turn}: Received structured response via function call")
+                        return {"llm_response": structured_response, "usage": accumulated_usage}
+                    
+                    # Execute functions via orchestrator using new object-based approach
+                    if function_calls_list:
+                        # Create execution input
+                        execution_input = FunctionExecutionInput(
+                            function_calls=function_calls_list,
+                            available_functions=input.regular_functions or {},
+                            available_background_tasks=input.background_tasks or {}
+                        )
                         
-                        # Handle text content
-                        if hasattr(candidate, 'content') and candidate.content:
-                            if hasattr(candidate.content, 'parts'):
-                                for part in candidate.content.parts:
-                                    if hasattr(part, 'text') and part.text:
-                                        content = part.text
-                                        complete_content += content
-                                        yield {"llm_response": content}
+                        execution_result = await self._execute_functions_with_orchestrator(execution_input)
+                        
+                        # Add function results to conversation
+                        self._add_function_results_to_contents(execution_result, contents)
+                        
+                        # Continue if we have regular functions (need to continue conversation)
+                        regular_function_calls = [call for call in function_calls_list if not call.is_background]
+                        if regular_function_calls:
+                            current_turn += 1
+                            continue
                 
-                # Final yield with usage
-                yield {"llm_response": complete_content, "usage": usage}
-
-        except Exception as e:
-            self.logger.error(f"Error in Gemini stream_completion: {str(e)}")
-            self.logger.error(traceback.format_exc())
-            yield {"llm_response": f"An error occurred: {str(e)}", "usage": None}
-    
-    def _is_json_complete(self, json_str: str) -> tuple[bool, str]:
-        """
-        Check if JSON string is complete and properly balanced.
-        Simplified version for Gemini client.
-        """
-        try:
-            json.loads(json_str)
-            return True, json_str
-        except json.JSONDecodeError:
-            # Try to fix common issues
-            fixed_json = json_str.strip()
-            if not fixed_json.endswith('}'):
-                fixed_json += '}'
-            try:
-                json.loads(fixed_json)
-                return True, fixed_json
-            except json.JSONDecodeError:
-                return False, json_str
-    
-    def _process_usage_metadata(self, raw_usage_metadata) -> Dict[str, Any]:
-        """
-        Process usage metadata from Gemini model response into standardized format.
-        
-        Args:
-            raw_usage_metadata: Raw usage metadata from Gemini response
-            
-        Returns:
-            Standardized usage metadata dictionary with OpenAI-compatible keys
-        """
-        try:
-            if not raw_usage_metadata:
+                # Extract text from response
+                response_text = self._extract_text_from_response(response)
+                
+                # Check for structured response
+                if input.structure_type:
+                    if response_text:
+                        try:
+                            final_response = parse_to_structure(response_text, input.structure_type)
+                            self.logger.info(f"Turn {current_turn}: Received structured response")
+                            return {"llm_response": final_response, "usage": accumulated_usage}
+                        except ValueError as e:
+                            self.logger.warning(f"Structured parsing failed: {str(e)}")
+                            contents.append(response_text)
+                
+                # Return text response
+                if response_text:
+                    self.logger.info(f"Turn {current_turn}: Received text response")
+                    return {"llm_response": response_text, "usage": accumulated_usage}
+                
+                current_turn += 1
+                
+            except Exception as e:
+                self.logger.error(f"Error in Gemini chat_with_functions turn {current_turn}: {str(e)}")
                 return {
-                    'prompt_tokens': 0,
-                    'completion_tokens': 0,
-                    'total_tokens': 0
+                    "llm_response": f"An error occurred: {str(e)}",
+                    "usage": accumulated_usage,
                 }
+        
+        # Handle max turns reached
+        return {
+            "llm_response": "Maximum number of function calling turns reached",
+            "usage": accumulated_usage,
+        }
+
+    async def _stream_simple(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
+        """Handle simple streaming without tools or background tasks."""
+        # Build base context
+        contents = [self._prepare_base_context(input)]
+        
+        # Add structured output instructions if needed
+        if input.structure_type:
+            contents[0] += STRUCTURE_INSTRUCTIONS_TEMPLATE
+        
+        # Generate streaming content
+        stream = self._client.models.generate_content_stream(
+            model=self.config.model,
+            contents=contents,
+            config=self._create_generation_config(input.structure_type),
+        )
+
+        accumulated_usage = None
+        collected_text = ""
+
+        for chunk in stream:
+            # Process usage metadata safely
+            if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                current_usage = self._standardize_usage_metadata(
+                    chunk.usage_metadata, self._get_provider_name(), self.config.model
+                )
+                accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
+
+            # Extract text from chunk
+            chunk_text = self._extract_text_from_response(chunk)
+            if chunk_text:
+                collected_text += chunk_text
+                
+                # Handle structured vs regular text streaming
+                if input.structure_type:                            
+                    # Try to parse the accumulated content as JSON for structured output
+                    is_complete, fixed_json = is_json_complete(collected_text)
+                    if is_complete:
+                        try:
+                            final_response = parse_to_structure(fixed_json, input.structure_type)
+                            yield {"llm_response": final_response}
+                        except ValueError:
+                            pass
+                else:
+                    # Regular text streaming
+                    yield {"llm_response": collected_text}
+
+        # Final yield with usage information
+        yield {"llm_response": None, "usage": accumulated_usage}
+
+    async def _stream_with_functions(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
+        """Handle complex streaming with tools and/or background tasks."""
+        # Build base context and prepare tools
+        contents = [self._prepare_base_context(input)]
+        
+        # Prepare tools for Gemini
+        gemini_tools = []
+        
+        # Convert all functions using the new unified approach
+        all_functions = {}
+        if input.regular_functions:
+            all_functions.update(input.regular_functions)
+        if input.background_tasks:
+            all_functions.update(input.background_tasks)
+        
+        if all_functions:
+            gemini_tools.extend(self._convert_callables_to_provider_format(all_functions))
+        
+        # Note: Background tasks are now included in the unified conversion above
+        
+        # Multi-turn streaming conversation for function calling  
+        current_turn = 0
+        accumulated_usage = None
+        
+        while current_turn < input.max_turns:
+            self.logger.info(f"Stream function calling turn: {current_turn}")
             
-            # Map Gemini usage to standard OpenAI format
-            prompt_tokens = getattr(raw_usage_metadata, 'prompt_token_count', 0)
-            completion_tokens = getattr(raw_usage_metadata, 'candidates_token_count', 0)
-            total_tokens = getattr(raw_usage_metadata, 'total_token_count', 0)
-            
-            return {
-                'prompt_tokens': prompt_tokens,
-                'completion_tokens': completion_tokens, 
-                'total_tokens': total_tokens
+            try:
+                # Create tool objects for Gemini
+                tools = [Tool(function_declarations=gemini_tools)] if gemini_tools else None
+                
+                # Generate streaming content with tools (manual mode)
+                stream = self._client.models.generate_content_stream(
+                    model=self.config.model,
+                    contents=contents,
+                    config=self._create_generation_config(input.structure_type, tools),
+                )
+                
+                # Progressive streaming state management
+                streaming_state = StreamingExecutionState()
+                collected_text = ""
+                chunk_count = 0
+                # Track tool calls for progressive processing
+                tool_calls_in_progress = {}
+                
+                self.logger.debug(f"Starting progressive stream processing for turn {current_turn}")
+
+                # Process streaming response with progressive function execution
+                for chunk in stream:
+                    chunk_count += 1
+                    
+                    # Handle usage metadata
+                    if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                        current_usage = self._standardize_usage_metadata(
+                            chunk.usage_metadata, self._get_provider_name(), self.config.model
+                        )
+                        accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
+                    
+                    # Extract text from chunk
+                    chunk_text = self._extract_text_from_response(chunk)
+                    if chunk_text:
+                        collected_text += chunk_text
+                        # For structured output, we only yield content via function calls, not direct content
+                        if not input.structure_type:
+                            yield {"llm_response": collected_text}
+                        else:
+                            # Check if JSON is complete for structured response
+                            is_complete, fixed_json = is_json_complete(collected_text)
+                            if is_complete:
+                                try:
+                                    final_response = parse_to_structure(fixed_json, input.structure_type)
+                                    yield {"llm_response": final_response, "usage": accumulated_usage}
+                                except ValueError:
+                                    pass
+                    
+                    # Handle function calls with progressive execution
+                    if hasattr(chunk, "function_calls") and chunk.function_calls:
+                        for func_call in chunk.function_calls:
+                            # For Gemini, function calls arrive complete in chunks
+                            # Track them in progress similar to OpenRouter pattern
+                            call_index = len(tool_calls_in_progress)
+                            
+                            if call_index not in tool_calls_in_progress:
+                                tool_calls_in_progress[call_index] = {
+                                    "name": func_call.name,
+                                    "args": dict(func_call.args) if hasattr(func_call, 'args') and func_call.args else {},
+                                    "id": f"{func_call.name}_{call_index}"
+                                }
+                            
+                            current_tool_call = tool_calls_in_progress[call_index]
+                            function_name = current_tool_call["name"]
+                            function_args = current_tool_call["args"]
+                            
+                            # Progressive execution: function is complete for Gemini
+                            # Create function call object for progressive execution
+                            function_call = FunctionCall(
+                                name=function_name,
+                                args=function_args,
+                                call_id=current_tool_call["id"],
+                                is_background=function_name in (input.background_tasks or {})
+                            )
+                            
+                            # Execute progressively if not already executed
+                            if not streaming_state.is_already_executed(function_call):
+                                self.logger.info(f"Executing function progressively: {function_call.name} at {time.time()}")
+                                try:
+                                    task = await self._execute_function_progressively(function_call, input)
+                                    streaming_state.add_function_task(task, function_call)
+                                except Exception as e:
+                                    self.logger.error(f"Progressive execution failed for {function_call.name}: {str(e)}")
+
+                self.logger.debug(f"Turn {current_turn}: Stream ended. Processed {chunk_count} chunks. "
+                               f"Tool calls: {len(tool_calls_in_progress)}, Text collected: {len(collected_text)} chars, "
+                               f"Progressive tasks: {len(streaming_state.active_function_tasks)}")
+
+                # Progressive streaming: gather results from executed functions
+                if streaming_state.active_function_tasks:
+                    self.logger.info(f"Gathering results from {len(streaming_state.active_function_tasks)} progressive function executions")
+                    
+                    # Gather progressive execution results
+                    execution_result = await self._gather_progressive_results(streaming_state.active_function_tasks)
+                    
+                    # Add failed functions to context for model awareness
+                    if execution_result.get('failed_functions'):
+                        context_messages = []
+                        for msg in contents:
+                            if isinstance(msg, str):
+                                context_messages.append(msg)
+                        self._add_failed_functions_to_context(execution_result['failed_functions'], context_messages)
+                        # Update contents with context
+                        if context_messages:
+                            contents.append(context_messages[-1])
+                    
+                    # Add function results to conversation
+                    self._add_function_results_to_contents(execution_result, contents)
+                    
+                    # Check if we have regular function calls that require conversation continuation
+                    regular_results = execution_result.get('regular_results', [])
+                    if regular_results:
+                        current_turn += 1
+                        continue
+                
+                # Stream completed for this turn
+                self.logger.debug(f"Turn {current_turn}: Stream completed")
+                break
+                
+            except Exception as e:
+                self.logger.error(f"Error in Gemini stream_with_functions turn {current_turn}: {str(e)}")
+                yield {
+                    "llm_response": f"An error occurred: {str(e)}",
+                    "usage": accumulated_usage,
+                }
+                return
+        
+        # Handle max turns reached
+        if current_turn >= input.max_turns:
+            self.logger.warning(f"Maximum turns reached: {current_turn} >= {input.max_turns}")
+            yield {
+                "llm_response": "Maximum number of function calling turns reached",
+                "usage": accumulated_usage,
             }
-            
-        except Exception as e:
-            self.logger.warning(f"Error processing Gemini usage metadata: {str(e)}")
-            return {
-                'prompt_tokens': 0,
-                'completion_tokens': 0,
-                'total_tokens': 0
-            }
+        else:
+            # Final usage yield if no structured response was returned
+            yield {"llm_response": None, "usage": accumulated_usage}

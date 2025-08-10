@@ -19,7 +19,6 @@ This section provides detailed documentation for all classes, functions, and mod
 
    tools/index
    extensions/index
-   factories/index
    
 .. toctree::
    :maxdepth: 2
@@ -53,15 +52,15 @@ Quick Reference
 Core Classes
 ------------
 
-.. currentmodule:: arshai
+.. currentmodule:: arshai.core.interfaces
 
 .. autosummary::
    :toctree: generated/
    :template: class.rst
 
-   Settings
    IAgentConfig
    IAgentInput
+   ILLMConfig
 
 Main Interfaces
 ---------------
@@ -78,14 +77,14 @@ Main Interfaces
    IWorkflow
    IMemoryManager
 
-Factory Classes
----------------
+LLM Clients
+-----------
 
-.. currentmodule:: arshai.factories
+.. currentmodule:: arshai.llms
 
 .. autosummary::
    :toctree: generated/
+   :template: class.rst
 
-   agent_factory.AgentFactory
-   llm_factory.LLMFactory
-   memory_factory.MemoryFactory
+   openai.OpenAIClient
+   azure.AzureClient

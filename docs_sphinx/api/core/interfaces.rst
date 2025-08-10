@@ -32,6 +32,16 @@ LLM Interfaces
    :undoc-members:
    :show-inheritance:
 
+.. autoclass:: ILLMConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: ILLMInput
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Tool Interfaces
 ===============
 
@@ -119,11 +129,6 @@ Other Interfaces
 ================
 
 .. autoclass:: ISpeech
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. autoclass:: ISetting
    :members:
    :undoc-members:
    :show-inheritance:

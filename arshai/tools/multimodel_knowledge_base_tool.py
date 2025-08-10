@@ -1,7 +1,9 @@
 from PIL import Image
 from typing import Dict, Any, List, Optional, Union
 from arshai.core.interfaces.itool import ITool
-from arshai.core.interfaces.isetting import ISetting
+from arshai.core.interfaces.ivector_db_client import IVectorDBClient, ICollectionConfig
+from arshai.core.interfaces.iembedding import IEmbedding
+from arshai.core.interfaces.ireranker import IReranker
 from arshai.core.interfaces.idocument import Document
 import logging
 import traceback
@@ -9,34 +11,73 @@ import traceback
 class MultimodalKnowledgeBaseRetrievalTool(ITool):
     """Tool for retrieving knowledge from the vector database using both semantic and keyword-based search"""
     
-    def __init__(self, settings: ISetting):
-        self.settings = settings
-        self.logger = logging.getLogger('KnowledgeBaseRetrievalTool')
+    def __init__(self, 
+                 vector_db: IVectorDBClient, 
+                 embedding_model: IEmbedding,
+                 collection_config: ICollectionConfig,
+                 reranker: Optional[IReranker] = None,
+                 search_limit: int = 3):
+        """
+        Initialize the multimodal knowledge base retrieval tool.
         
-        # Log availability of required components
-        if not settings:
-            self.logger.error("Settings not provided")
-            return
+        Args:
+            vector_db: Vector database client for storing/retrieving embeddings
+            embedding_model: Embedding model for converting queries to vectors
+            collection_config: Complete collection configuration including field names and settings
+            reranker: Optional reranker for improving search result quality
+            search_limit: Maximum number of results to return (default: 3)
+        
+        Example:
+            from arshai.vector_db.milvus_client import MilvusClient
+            from arshai.embeddings.openai_embeddings import OpenAIEmbedding
+            from arshai.rerankers.voyage_reranker import VoyageReranker
+            from arshai.core.interfaces.iembedding import EmbeddingConfig
+            from arshai.core.interfaces.ivector_db_client import ICollectionConfig
             
-        # Get the vector db client and embedding model from settings
-        self.vector_db, self.collection_config, self.embedding_model = self.settings.create_vector_db()
+            # Create components directly
+            vector_db = MilvusClient(host="localhost", port=19530)
+            
+            embedding_config = EmbeddingConfig(model_name="text-embedding-3-small")
+            embedding_model = OpenAIEmbedding(embedding_config)
+            
+            reranker = VoyageReranker(model="rerank-lite-1")  # Optional
+            
+            collection_config = ICollectionConfig(
+                collection_name="multimodal_kb",
+                dense_dim=1536,
+                text_field="content", 
+                metadata_field="metadata",
+                is_hybrid=True  # Multimodal often uses hybrid search
+            )
+            
+            # Create multimodal knowledge base tool
+            kb_tool = MultimodalKnowledgeBaseRetrievalTool(
+                vector_db=vector_db,
+                embedding_model=embedding_model,
+                collection_config=collection_config,
+                reranker=reranker,
+                search_limit=5
+            )
+        """
+        self.vector_db = vector_db
+        self.embedding_model = embedding_model
+        self.collection_config = collection_config
+        self.reranker = reranker
+        self.search_limit = search_limit
+        self.logger = logging.getLogger('MultimodalKnowledgeBaseRetrievalTool')
         
-        self.reranker = self.settings.create_reranker()
+        # Validate required components
+        if not vector_db:
+            self.logger.error("Vector database client not provided")
+        if not embedding_model:
+            self.logger.error("Embedding model not provided")
+        if not collection_config:
+            self.logger.error("Collection configuration not provided")
         
-        # Get search parameters from config
-        self.search_limit = self.settings.get("search_limit", 3)
-        
-        self.logger.info(f"search_limit: {self.search_limit}")
-        # Check if components are available
-        if self.vector_db is None:
-            self.logger.error("Vector database client not available")
-            return False
-        if self.embedding_model is None:
-            self.logger.error("Embedding model not available")
-            return False
-        if self.collection_config is None:
-            self.logger.error("Collection configuration not available")
-            return False
+        if vector_db and embedding_model and collection_config:
+            self.logger.info(f"Initialized multimodal KB tool - Collection: {collection_config.collection_name}, "
+                           f"Reranker: {'enabled' if reranker else 'disabled'}, "
+                           f"Search limit: {search_limit}")
             
 
     @property

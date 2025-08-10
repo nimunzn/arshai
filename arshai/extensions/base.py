@@ -78,10 +78,8 @@ class Plugin(ABC):
     
     def register_agent(self, name: str, agent_class: Type[IAgent]) -> None:
         """Register a new agent type."""
-        from arshai.factories.agent_factory import AgentFactory
-        # This would need to be implemented in AgentFactory
-        # AgentFactory.register(name, agent_class)
-        pass
+        from arshai.utils.agent_utils import register_agent_type
+        register_agent_type(name, agent_class)
     
     def register_tool(self, tool: ITool) -> None:
         """Register a new tool."""
@@ -90,17 +88,13 @@ class Plugin(ABC):
     
     def register_llm_provider(self, name: str, llm_class: Type[ILLM]) -> None:
         """Register a new LLM provider."""
-        from arshai.factories.llm_factory import LLMFactory
-        # This would need to be implemented in LLMFactory
-        # LLMFactory.register(name, llm_class)
-        pass
+        from arshai.utils.llm_utils import register_llm_provider
+        register_llm_provider(name, llm_class)
     
     def register_memory_provider(self, name: str, memory_class: Type[IMemoryManager]) -> None:
         """Register a new memory provider."""
-        from arshai.factories.memory_factory import MemoryFactory
-        # This would need to be implemented in MemoryFactory
-        # MemoryFactory.register(name, memory_class)
-        pass
+        from arshai.utils.memory_utils import register_memory_provider
+        register_memory_provider(name, memory_class)
 
 
 class PluginRegistry:

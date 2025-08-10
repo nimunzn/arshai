@@ -31,79 +31,139 @@ And set up your API keys:
    # Optional: for Redis memory
    export REDIS_URL="redis://localhost:6379"
 
-Step 1: Basic Agent Configuration
-=================================
+Step 1: Basic Agent with Direct Instantiation
+============================================
 
-Let's start with a well-configured conversational agent:
+Let's create a research agent using direct instantiation:
 
 .. code-block:: python
 
-   from arshai import Settings, IAgentConfig, IAgentInput
+   import os
+   import asyncio
+   from arshai.llms.openai import OpenAIClient
+   from arshai.core.interfaces.illm import ILLMConfig, ILLMInput
+   from arshai.agents.base import BaseAgent
+   from arshai.core.interfaces.iagent import IAgentInput
+
+   class ResearchAgent(BaseAgent):
+       """A professional research assistant."""
+       
+       async def process(self, input: IAgentInput) -> str:
+           llm_input = ILLMInput(
+               system_prompt=self.system_prompt,
+               user_message=input.message
+           )
+           result = await self.llm_client.chat(llm_input)
+           return result['llm_response']
 
    def create_research_agent():
-       # Initialize settings
-       settings = Settings()
+       # Set API key
+       os.environ["OPENAI_API_KEY"] = "your-openai-api-key"
        
-       # Define the agent's role and capabilities
-       agent_config = IAgentConfig(
-           task_context='''
-           You are a professional research assistant with the following capabilities:
-           
-           1. Web search for current information
-           2. Analysis and synthesis of multiple sources
-           3. Clear, structured responses with citations
-           4. Maintaining conversation context
-           
-           Always:
-           - Provide accurate, well-researched information
-           - Cite your sources when using web search
-           - Ask clarifying questions when requests are ambiguous
-           - Maintain a professional but friendly tone
-           ''',
-           tools=[]  # We'll add tools next
+       # Create LLM client (Layer 1)
+       llm_config = ILLMConfig(
+           model="gpt-4o",
+           temperature=0.7,
+           max_tokens=2000
+       )
+       llm_client = OpenAIClient(llm_config)
+       
+       # Create research agent (Layer 2)
+       system_prompt = '''
+       You are a professional research assistant with the following capabilities:
+       
+       1. Web search for current information
+       2. Analysis and synthesis of multiple sources  
+       3. Clear, structured responses with citations
+       4. Maintaining conversation context
+       
+       Always:
+       - Provide accurate, well-researched information
+       - Cite your sources when using web search
+       - Ask clarifying questions when requests are ambiguous
+       - Maintain a professional but friendly tone
+       '''
+       
+       agent = ResearchAgent(
+           llm_client=llm_client,
+           system_prompt=system_prompt.strip()
        )
        
-       return settings.create_agent("conversation", agent_config), settings
+       return agent
 
    # Create the agent
-   agent, settings = create_research_agent()
+   agent = create_research_agent()
 
-Step 2: Adding Web Search Tool
-==============================
+Step 2: Adding Web Search with Function Calling
+===============================================
 
-Now let's add web search capabilities:
+Now let's add web search capabilities using direct instantiation:
 
 .. code-block:: python
 
-   from arshai.tools.web_search_tool import WebSearchTool
+   from arshai.tools import WebSearchTool
+
+   class ResearchAgentWithTools(BaseAgent):
+       """Research agent with web search capabilities."""
+       
+       def __init__(self, llm_client, system_prompt, web_search_tool):
+           super().__init__(llm_client, system_prompt)
+           self.web_search = web_search_tool
+       
+       async def process(self, input: IAgentInput) -> str:
+           # Define search tool function
+           def search_web(query: str) -> str:
+               """Search the web for current information."""
+               try:
+                   results = self.web_search.search(query)
+                   return f"Search results for '{query}': {results}"
+               except Exception as e:
+                   return f"Search failed: {str(e)}"
+           
+           # Use LLM with function calling
+           llm_input = ILLMInput(
+               system_prompt=self.system_prompt,
+               user_message=input.message,
+               regular_functions={"search_web": search_web}
+           )
+           
+           result = await self.llm_client.chat(llm_input)
+           return result['llm_response']
 
    def create_research_agent_with_tools():
-       settings = Settings()
+       # Create LLM client (Layer 1)
+       llm_config = ILLMConfig(model="gpt-4o", temperature=0.7)
+       llm_client = OpenAIClient(llm_config)
        
-       # Create web search tool
-       web_search = WebSearchTool(settings)
+       # Create web search tool (Optional Framework Component)
+       web_search = WebSearchTool()  # Or inject search client directly
        
-       agent_config = IAgentConfig(
-           task_context='''
-           You are a research assistant with web search capabilities.
-           
-           When users ask questions that require current information:
-           1. Use web search to find relevant, up-to-date information
-           2. Analyze and synthesize information from multiple sources
-           3. Provide clear, well-structured responses
-           4. Always cite your sources with URLs when using search results
-           
-           For general knowledge questions, you can use your training data,
-           but for current events, statistics, or recent developments,
-           always use web search to ensure accuracy.
-           ''',
-           tools=[web_search]
+       # Enhanced system prompt
+       system_prompt = '''
+       You are a research assistant with web search capabilities.
+       
+       When users ask questions that require current information:
+       1. Use web search to find relevant, up-to-date information
+       2. Analyze and synthesize information from multiple sources
+       3. Provide clear, well-structured responses  
+       4. Always cite your sources with URLs when using search results
+       
+       For general knowledge questions, you can use your training data,
+       but for current events, statistics, or recent developments,
+       always use web search to ensure accuracy.
+       '''
+       
+       # Create enhanced agent (Layer 2)
+       agent = ResearchAgentWithTools(
+           llm_client=llm_client,
+           system_prompt=system_prompt.strip(),
+           web_search_tool=web_search
        )
        
-       return settings.create_agent("conversation", agent_config), settings
+       return agent
 
    # Create enhanced agent
-   agent, settings = create_research_agent_with_tools()
+   agent = create_research_agent_with_tools()
 
 Step 3: Testing the Agent
 =========================
