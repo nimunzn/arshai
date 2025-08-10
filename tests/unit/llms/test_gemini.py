@@ -185,8 +185,8 @@ TEST_CASES = {
     },
     
     "math_tools": {
-        "system_prompt": "You are a helpful mathematical assistant. Use the provided tools when you need to perform calculations. After getting the results, provide a clear explanation of what was calculated.",
-        "user_message": "Calculate 5 to the power of 2, then multiply the result by 3. do it step by step not all at once, first calculate the power then based on its data calculate the multiply, do not call both at once while you dont have the result of the first.",
+        "system_prompt": "You are a helpful mathematical assistant. Use the provided tools to perform calculations step by step. IMPORTANT: Only call one function at a time and wait for the result before calling the next function. After getting results from tools, provide a clear explanation.",
+        "user_message": "Please calculate 5 to the power of 2 first. After you get that result, multiply it by 3. Do these calculations one at a time using the available tools.",
         "regular_functions": {
             "power": power_function,
             "multiply": multiply_function
