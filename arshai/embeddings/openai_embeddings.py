@@ -2,6 +2,7 @@
 OpenAI embeddings implementation.
 """
 
+import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 import os
@@ -101,6 +102,19 @@ class OpenAIEmbedding(IEmbedding):
         
         return {"dense": dense_vectors}
     
+    async def aembed_document(self, text: str) -> Dict[str, Any]:
+        """
+        Asynchronously generate embeddings for a single document.
+        
+        Args:
+            text: Text document to embed
+            
+        Returns:
+            Dictionary containing embeddings with 'dense' vectors
+        """
+        embeddings = await self.aembed_documents([text])
+        return {"dense": embeddings["dense"][0]}
+    
     def embed_document(self, text: str) -> Dict[str, Any]:
         """
         Generate embeddings for a single document.
@@ -140,7 +154,20 @@ class OpenAIEmbedding(IEmbedding):
                 batch_embeddings = [data.embedding for data in response.data]
                 dense_vectors.extend(batch_embeddings)
             except Exception as e:
-                self.logger.error(f"Error generating embeddings with OpenAI: {str(e)}")
+                self.logger.error(f"Error generating async embeddings with OpenAI: {str(e)}")
                 raise e
         
-        return {"dense": dense_vectors} 
+        return {"dense": dense_vectors}
+    
+    async def aembed_document(self, text: str) -> Dict[str, Any]:
+        """
+        Asynchronously generate embeddings for a single document.
+        
+        Args:
+            text: Text document to embed
+            
+        Returns:
+            Dictionary containing embeddings with 'dense' vectors
+        """
+        embeddings = await self.aembed_documents([text])
+        return {"dense": embeddings["dense"][0]} 

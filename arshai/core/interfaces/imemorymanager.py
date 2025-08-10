@@ -237,3 +237,65 @@ class IMemoryManager(Protocol):
         """
         ...
 
+    # ----------------------
+    # Async Methods (Optional - Backward Compatible Extensions)
+    # ----------------------
+
+    async def store_async(self, input: IMemoryInput) -> str:
+        """
+        Async version of store method.
+        
+        Default implementation uses executor to wrap sync method.
+        Implementations should override with native async for better performance.
+
+        Args:
+            input: IMemoryInput containing data and metadata for storage
+
+        Returns:
+            str: Unique identifier for the stored memory
+        """
+        import asyncio
+        return await asyncio.to_thread(self.store, input)
+
+    async def retrieve_async(self, input: IMemoryInput) -> List[IWorkingMemory]:
+        """
+        Async version of retrieve method.
+        
+        Default implementation uses executor to wrap sync method.
+        Implementations should override with native async for better performance.
+
+        Args:
+            input: IMemoryInput containing query and retrieval parameters
+
+        Returns:
+            List[IWorkingMemory]: Matching memory entries
+        """
+        import asyncio
+        return await asyncio.to_thread(self.retrieve, input)
+
+    async def update_async(self, input: IMemoryInput) -> None:
+        """
+        Async version of update method.
+        
+        Default implementation uses executor to wrap sync method.
+        Implementations should override with native async for better performance.
+
+        Args:
+            input: IMemoryInput containing memory ID and update data
+        """
+        import asyncio
+        await asyncio.to_thread(self.update, input)
+
+    async def delete_async(self, input: IMemoryInput) -> None:
+        """
+        Async version of delete method.
+        
+        Default implementation uses executor to wrap sync method.
+        Implementations should override with native async for better performance.
+
+        Args:
+            input: IMemoryInput containing memory ID or deletion criteria
+        """
+        import asyncio
+        await asyncio.to_thread(self.delete, input)
+

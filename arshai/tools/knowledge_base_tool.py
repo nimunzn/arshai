@@ -153,25 +153,51 @@ class KnowledgeBaseRetrievalTool(ITool):
         """
 
         try:
-            # Generate embeddings for the query
-            query_embeddings = self.embedding_model.embed_document(query)
+            # Generate embeddings for the query asynchronously
+            if hasattr(self.embedding_model, 'aembed_document'):
+                query_embeddings = await self.embedding_model.aembed_document(query)
+            else:
+                # Fallback to sync method with executor
+                import asyncio
+                query_embeddings = await asyncio.to_thread(self.embedding_model.embed_document, query)
             
-            # Perform vector search
+            # Perform vector search asynchronously
             if self.collection_config.is_hybrid and 'sparse' in query_embeddings:
                 # Use hybrid search if configuration supports it
-                search_results = self.vector_db.hybrid_search(
-                    config=self.collection_config,
-                    dense_vectors=[query_embeddings['dense']],
-                    sparse_vectors=[query_embeddings['sparse']],
-                    limit=self.search_limit
-                )
+                if hasattr(self.vector_db, 'hybrid_search_async'):
+                    search_results = await self.vector_db.hybrid_search_async(
+                        config=self.collection_config,
+                        dense_vectors=[query_embeddings['dense']],
+                        sparse_vectors=[query_embeddings['sparse']],
+                        limit=self.search_limit
+                    )
+                else:
+                    # Fallback to sync method with executor
+                    import asyncio
+                    search_results = await asyncio.to_thread(
+                        self.vector_db.hybrid_search,
+                        config=self.collection_config,
+                        dense_vectors=[query_embeddings['dense']],
+                        sparse_vectors=[query_embeddings['sparse']],
+                        limit=self.search_limit
+                    )
             else:
                 # Use dense vector search only
-                search_results = self.vector_db.search_by_vector(
-                    config=self.collection_config,
-                    query_vectors=[query_embeddings['dense']],
-                    limit=self.search_limit
-                )
+                if hasattr(self.vector_db, 'search_by_vector_async'):
+                    search_results = await self.vector_db.search_by_vector_async(
+                        config=self.collection_config,
+                        query_vectors=[query_embeddings['dense']],
+                        limit=self.search_limit
+                    )
+                else:
+                    # Fallback to sync method with executor
+                    import asyncio
+                    search_results = await asyncio.to_thread(
+                        self.vector_db.search_by_vector,
+                        config=self.collection_config,
+                        query_vectors=[query_embeddings['dense']],
+                        limit=self.search_limit
+                    )
             
             # Format the search results
             if search_results and len(search_results) > 0:
@@ -181,7 +207,7 @@ class KnowledgeBaseRetrievalTool(ITool):
                 return "function", [{"type": "text", "text": "No relevant information found."}]
                 
         except Exception as e:
-            self.logger.error(f"Error during vector search: {str(e)}")
+            self.logger.error(f"Error during async vector search: {str(e)}")
             self.logger.error(f"Query embeddings type: {type(query_embeddings)}")
             if isinstance(query_embeddings, dict):
                 self.logger.error(f"Query embeddings keys: {list(query_embeddings.keys())}")

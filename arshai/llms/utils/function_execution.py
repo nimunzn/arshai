@@ -110,6 +110,19 @@ class FunctionOrchestrator:
         self._background_tasks: Set[asyncio.Task] = set()
         # NEW: Track progressive execution tasks
         self._progressive_tasks: Dict[str, asyncio.Task] = {}
+        
+        # Memory management configuration
+        self._max_background_tasks = 1000  # Configurable limit
+        self._cleanup_task: Optional[asyncio.Task] = None
+        self._cleanup_interval = 300  # 5 minutes
+        
+        # Start periodic cleanup monitor
+        try:
+            loop = asyncio.get_running_loop()
+            self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
+        except RuntimeError:
+            # No event loop running yet
+            pass
     
     async def execute_functions(self, execution_input: FunctionExecutionInput) -> FunctionExecutionResult:
         """
@@ -374,9 +387,8 @@ class FunctionOrchestrator:
         
         task = asyncio.create_task(execute_background())
         
-        # Add to background task set for reference management
-        self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
+        # Add to background task set with size limit enforcement
+        self._add_background_task_with_limit(task)
         
         task.function_call = function_call  # Attach metadata
         return task
@@ -491,8 +503,8 @@ class FunctionOrchestrator:
                 return func(**call.args)
             task = asyncio.create_task(sync_background_wrapper())
         
-        # Add to background task set for reference management
-        self._background_tasks.add(task)
+        # Add to background task set with size limit enforcement
+        self._add_background_task_with_limit(task)
         
         # Add error handling callback for background tasks
         def handle_background_completion(completed_task):
@@ -554,3 +566,63 @@ class FunctionOrchestrator:
                 logger.warning(f"Background tasks did not complete within {timeout} seconds")
             except Exception as e:
                 logger.warning(f"Error waiting for background tasks: {str(e)}")
+    
+    async def _periodic_cleanup(self) -> None:
+        """
+        Periodically clean up completed background tasks to prevent memory leaks.
+        Runs every cleanup_interval seconds.
+        """
+        while True:
+            try:
+                await asyncio.sleep(self._cleanup_interval)
+                
+                # Find and remove completed tasks
+                completed_tasks = [task for task in self._background_tasks if task.done()]
+                for task in completed_tasks:
+                    self._background_tasks.discard(task)
+                    try:
+                        # Retrieve any exceptions to prevent warnings
+                        await task
+                    except Exception:
+                        pass  # Already logged by completion callback
+                
+                if completed_tasks:
+                    logger.debug(f"Cleaned up {len(completed_tasks)} completed background tasks")
+                
+                # Log warning if approaching limit
+                active_count = len(self._background_tasks)
+                if active_count > self._max_background_tasks * 0.8:
+                    logger.warning(
+                        f"Background tasks nearing limit: {active_count}/{self._max_background_tasks}"
+                    )
+                    
+            except Exception as e:
+                logger.error(f"Error in periodic cleanup: {str(e)}")
+    
+    def _add_background_task_with_limit(self, task: asyncio.Task) -> None:
+        """
+        Add a background task with size limit enforcement.
+        
+        Args:
+            task: The background task to add
+            
+        Raises:
+            MemoryError: If background task limit is exceeded
+        """
+        # Check if we're at the limit
+        if len(self._background_tasks) >= self._max_background_tasks:
+            # Try to clean up completed tasks first
+            completed = [t for t in self._background_tasks if t.done()][:100]
+            for t in completed:
+                self._background_tasks.discard(t)
+            
+            # Check again after cleanup
+            if len(self._background_tasks) >= self._max_background_tasks:
+                raise MemoryError(
+                    f"Background task limit exceeded: {self._max_background_tasks}. "
+                    f"Consider increasing the limit or waiting for tasks to complete."
+                )
+        
+        # Add the task
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
