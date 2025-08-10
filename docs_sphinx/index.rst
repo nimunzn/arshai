@@ -109,14 +109,19 @@ Basic Usage - Direct Instantiation
 
 .. toctree::
    :maxdepth: 2
-   :caption: User Guide
+   :caption: Three-Layer Architecture
 
-   user-guide/agents/index
-   user-guide/workflows/index
-   user-guide/memory/index
-   user-guide/tools/index
-   user-guide/llms/index
-   user-guide/extensions/index
+   layer-guides/layer1-llm-clients
+   layer-guides/layer2-agents
+   layer-guides/layer3-systems
+   
+.. toctree::
+   :maxdepth: 2
+   :caption: Components & Tools
+
+   components/memory
+   components/tools
+   components/extensions
 
 .. toctree::
    :maxdepth: 2
