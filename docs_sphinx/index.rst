@@ -50,35 +50,50 @@ Installation
 
 .. code-block:: bash
 
-   pip install arshai
+   pip install arshai[openai]
 
-Basic Usage
------------
+Basic Usage - Direct Instantiation
+-----------------------------------
 
 .. code-block:: python
 
-   from arshai import Settings, IAgentConfig, IAgentInput
+   import os
+   from arshai.llms.openai import OpenAIClient
+   from arshai.core.interfaces.illm import ILLMConfig, ILLMInput
+   from arshai.agents.base import BaseAgent
+   from arshai.core.interfaces.iagent import IAgentInput
 
-   # Initialize settings
-   settings = Settings()
+   # Set your API key
+   os.environ["OPENAI_API_KEY"] = "your-api-key-here"
 
-   # Create agent configuration
-   agent_config = IAgentConfig(
-       task_context="You are a helpful assistant.",
-       tools=[]
+   # Create LLM client directly (Layer 1)
+   llm_config = ILLMConfig(
+       model="gpt-4o",
+       temperature=0.7
    )
+   llm_client = OpenAIClient(llm_config)
 
-   # Create conversation agent
-   agent = settings.create_agent("conversation", agent_config)
+   # Create agent directly (Layer 2)
+   class SimpleAgent(BaseAgent):
+       async def process(self, input: IAgentInput) -> str:
+           llm_input = ILLMInput(
+               system_prompt=self.system_prompt,
+               user_message=input.message
+           )
+           result = await self.llm_client.chat(llm_input)
+           return result['llm_response']
+
+   # Use your agent
+   agent = SimpleAgent(
+       llm_client=llm_client, 
+       system_prompt="You are a helpful assistant."
+   )
 
    # Process a message
-   response, usage = agent.process_message(
-       IAgentInput(
-           message="Hello! How can you help me?",
-           conversation_id="chat_123"
-       )
+   response = await agent.process(
+       IAgentInput(message="Hello! How can you help me?")
    )
-
+   
    print(f"Agent: {response}")
 
 📖 **Documentation**
