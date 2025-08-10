@@ -1,4 +1,4 @@
-from typing import List, Dict, Callable, Any, Optional, TypeVar, Type, Union, Protocol
+from typing import List, Dict, Callable, Any, Optional, TypeVar, Type, Union, Protocol, AsyncGenerator
 from dataclasses import dataclass
 import json
 import logging
@@ -31,6 +31,7 @@ class ILLMInput(IDTO):
     user_message: str = Field(description="the message of the user prompt")
     tools_list: List[Dict] = Field(default=[], description="list of defined tools for llm")
     callable_functions: Dict[str, Callable] = Field(default={}, description="list of callable tools for this message")
+    background_tasks: Dict[str, Callable] = Field(default={}, description="fire-and-forget background tasks that run independently")
     structure_type: Type[T] = Field(default=None, description="Output response")
     max_turns: int = Field(default=3, description="Times that llm can call tools")
 
@@ -114,19 +115,23 @@ class ILLM(Protocol):
         """Initialize the LLM provider client"""
         ...
 
-    def _create_structure_function(self, structure_type: Type[T]) -> Dict:
-        """Create a function definition from the structure type"""
+    def _needs_function_calling(self, input: ILLMInput) -> bool:
+        """Determine if function calling is needed based on input"""
         ...
 
-    def _parse_to_structure(self, content: Union[str, dict], structure_type: Type[T]) -> T:
-        """Parse response content into the specified structure type"""
+    def _convert_functions_to_llm_format(
+        self, 
+        functions: Union[List[Dict], Dict[str, Any]], 
+        function_type: str = "tool"
+    ) -> List[Any]:
+        """Convert functions to LLM provider-specific format"""
+        ...
+
+    
+    async def chat(self, input: ILLMInput) -> Dict[str, Any]:
+        """Process a chat message with optional tools and structured output"""
         ...
     
-    def chat_with_tools(
-        self,
-        input:ILLMInput) -> Union[ILLMOutput, str]: ...
-    
-    def chat_completion(
-        self,
-        input:ILLMInput
-    ) -> Union[ILLMOutput, str]: ...
+    async def stream(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
+        """Process a streaming chat message with optional tools and structured output"""
+        ...

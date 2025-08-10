@@ -1,23 +1,54 @@
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from arshai.core.interfaces.itool import ITool
 from arshai.core.interfaces.iwebsearch import IWebSearchClient
 import logging
-from ..config.settings import Settings
+import os
 
 logger = logging.getLogger(__name__)
 
 class WebSearchTool(ITool):
     """Tool for retrieving information from web search using search engines"""
     
-    def __init__(self, settings: Settings):
+    def __init__(self, search_client: Optional[IWebSearchClient] = None):
         """
         Initialize the web search tool.
         
         Args:
-            settings: Settings instance to get search configuration
+            search_client: Optional web search client. If not provided, will create SearxNG client
+                          using SEARX_INSTANCE environment variable.
+        
+        Environment variables:
+            SEARX_INSTANCE: URL of SearxNG instance (required if no client provided)
+        
+        Example:
+            # With custom client
+            from arshai.web_search.searxng import SearxNGClient
+            client = SearxNGClient(config={"language": "en"})
+            tool = WebSearchTool(search_client=client)
+            
+            # With default client (reads SEARX_INSTANCE env var)
+            tool = WebSearchTool()
         """
-        self.settings = settings
-        self.search_client: IWebSearchClient = self.settings.create_web_search()
+        if search_client:
+            self.search_client = search_client
+        else:
+            # Create default SearxNG client
+            searx_instance = os.getenv("SEARX_INSTANCE")
+            if not searx_instance:
+                logger.warning("No search client provided and SEARX_INSTANCE environment variable not set")
+                self.search_client = None
+            else:
+                try:
+                    from ..web_search.searxng import SearxNGClient
+                    config = {
+                        "language": "en",
+                        "default_engines": ["google", "bing", "duckduckgo"],
+                        "default_categories": ["general"]
+                    }
+                    self.search_client = SearxNGClient(config)
+                except Exception as e:
+                    logger.error(f"Failed to create SearxNG client: {e}")
+                    self.search_client = None
         
         if not self.search_client:
             logger.warning("Search client could not be created. Check configuration.")

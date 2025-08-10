@@ -10,8 +10,8 @@ __all__ = [
     "__version_info__",
     "__author__",
     "__email__",
-    # Config
-    "Settings",
+    # Config utilities (optional)
+    "load_config",
     # Interfaces  
     "IAgent",
     "IAgentConfig",
@@ -31,12 +31,12 @@ __all__ = [
 # Lazy loading to avoid import issues with optional dependencies
 def __getattr__(name):
     """Lazy import for better dependency handling."""
-    if name == "Settings":
+    if name == "load_config":
         try:
-            from arshai.config.settings import Settings
-            return Settings
+            from arshai.config import load_config
+            return load_config
         except ImportError as e:
-            raise ImportError(f"Cannot import Settings: {e}")
+            raise ImportError(f"Cannot import load_config: {e}")
     
     elif name in ["IAgent", "IAgentConfig", "IAgentInput", "IAgentOutput", 
                   "IWorkflow", "IWorkflowState", "ITool", "IMemoryManager", "ILLM"]:

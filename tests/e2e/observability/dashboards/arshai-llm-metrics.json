@@ -1,0 +1,146 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Arshai LLM Observability",
+    "tags": ["arshai", "llm", "observability"],
+    "style": "dark",
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "LLM Requests per Second",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rate(llm_requests_total[1m])",
+            "legendFormat": "{{llm_provider}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "palette-classic"
+            },
+            "unit": "reqps"
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Time to First Token (Key Metric)",
+        "type": "heatmap",
+        "targets": [
+          {
+            "expr": "llm_time_to_first_token_seconds",
+            "legendFormat": "{{llm_provider}}-{{llm_model}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "spectrum"
+            },
+            "unit": "s"
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "Time to Last Token (Key Metric)",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(llm_time_to_last_token_seconds_bucket[5m]))",
+            "legendFormat": "p95 - {{llm_provider}}"
+          },
+          {
+            "expr": "histogram_quantile(0.50, rate(llm_time_to_last_token_seconds_bucket[5m]))",
+            "legendFormat": "p50 - {{llm_provider}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "palette-classic"
+            },
+            "unit": "s"
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+      },
+      {
+        "id": 4,
+        "title": "Duration First to Last Token (Key Metric)",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(llm_duration_first_to_last_token_seconds_bucket[5m]))",
+            "legendFormat": "p95 - {{llm_provider}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "palette-classic"
+            },
+            "unit": "s"
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+      },
+      {
+        "id": 5,
+        "title": "Completion Tokens (Key Metric)",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rate(llm_completion_tokens[5m])",
+            "legendFormat": "{{llm_provider}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "palette-classic"
+            },
+            "unit": "tokens/s"
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+      },
+      {
+        "id": 6,
+        "title": "Active Requests",
+        "type": "gauge",
+        "targets": [
+          {
+            "expr": "llm_active_requests",
+            "legendFormat": "{{llm_provider}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 5},
+                {"color": "red", "value": 10}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+      }
+    ],
+    "time": {
+      "from": "now-30m",
+      "to": "now"
+    },
+    "refresh": "5s"
+  }
+}
