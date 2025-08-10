@@ -1,6 +1,6 @@
 from typing import Dict, Any, Optional, Callable
 from arshai.core.interfaces.iworkflow import INode, IWorkflowState
-from arshai.core.interfaces.iagent import IAgent, IAgentInput, IAgentConfig
+from arshai.core.interfaces.iagent import IAgent, IAgentInput
 from arshai.utils import get_logger
 
 class BaseNode(INode):
