@@ -9,6 +9,8 @@ import asyncio
 import concurrent.futures
 import json
 import logging
+import os
+import threading
 from typing import Any, Dict, List, Optional
 
 from arshai.core.interfaces.itool import ITool
@@ -25,6 +27,28 @@ class MCPDynamicTool(ITool):
     This class creates a dedicated ITool instance for each tool discovered
     from MCP servers, following the MCP pattern of individual tool definitions.
     """
+    
+    # Class-level shared thread pool
+    _executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
+    _executor_lock = threading.Lock()
+    
+    @classmethod
+    def _get_executor(cls) -> concurrent.futures.ThreadPoolExecutor:
+        """Get or create the shared thread pool executor."""
+        if cls._executor is None:
+            with cls._executor_lock:
+                if cls._executor is None:
+                    # Calculate optimal thread count
+                    max_workers = min(
+                        int(os.getenv("ARSHAI_MAX_THREADS", "32")),
+                        (os.cpu_count() or 1) * 2
+                    )
+                    cls._executor = concurrent.futures.ThreadPoolExecutor(
+                        max_workers=max_workers,
+                        thread_name_prefix="mcp_tool"
+                    )
+                    logger.info(f"Created MCP tool thread pool with {max_workers} workers")
+        return cls._executor
     
     def __init__(self, tool_spec: Dict[str, Any], server_manager: MCPServerManager):
         """
@@ -83,64 +107,33 @@ class MCPDynamicTool(ITool):
             # Try to determine if we're in an async context
             try:
                 loop = asyncio.get_running_loop()
-                # We're in an event loop, run in a thread with a simple approach
-                import threading
-                result_holder = {'result': None, 'exception': None, 'completed': False}
-                
-                def run_async():
-                    loop = None
-                    try:
-                        # Create new event loop for this thread
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        
-                        # Run the async method and wait for completion
-                        result_holder['result'] = loop.run_until_complete(self._execute_async(**kwargs))
-                        result_holder['completed'] = True
-                        
-                    except Exception as e:
-                        result_holder['exception'] = e
-                        result_holder['completed'] = True
-                    finally:
-                        # Only close the loop if we created it and ensure all operations are done
-                        if loop and not loop.is_closed():
-                            try:
-                                # Give any remaining async operations a moment to complete
-                                remaining_tasks = [task for task in asyncio.all_tasks(loop) if not task.done()]
-                                if remaining_tasks:
-                                    loop.run_until_complete(asyncio.gather(*remaining_tasks, return_exceptions=True))
-                            except Exception as cleanup_error:
-                                logger.debug(f"Minor cleanup issue for tool '{self.name}': {cleanup_error}")
-                            finally:
-                                loop.close()
-                
-                thread = threading.Thread(target=run_async)
-                thread.start()
-                thread.join(timeout=60)  # 60 second timeout
-                
-                if thread.is_alive():
-                    error_msg = f"Tool '{self.name}' on server '{self.server_name}' timed out after 60 seconds"
-                    logger.error(error_msg)
-                    return "function", [{"type": "text", "text": error_msg}]
-                
-                if not result_holder['completed']:
-                    error_msg = f"Tool '{self.name}' on server '{self.server_name}' did not complete properly"
-                    logger.error(error_msg)
-                    return "function", [{"type": "text", "text": error_msg}]
-                
-                if result_holder['exception']:
-                    raise result_holder['exception']
-                
-                return "function", result_holder['result']
+                # We're in an event loop, use shared thread pool
+                executor = self._get_executor()
+                future = executor.submit(self._run_sync_in_thread, kwargs)
+                result = future.result(timeout=60)  # 60 second timeout
+                return "function", result
                     
             except RuntimeError:
                 # No event loop running, safe to use asyncio.run()
                 return "function", asyncio.run(self._execute_async(**kwargs))
                 
+        except concurrent.futures.TimeoutError:
+            error_msg = f"Tool '{self.name}' on server '{self.server_name}' timed out after 60 seconds"
+            logger.error(error_msg)
+            return "function", [{"type": "text", "text": error_msg}]
         except Exception as e:
             error_msg = f"Error executing MCP tool '{self.name}' on server '{self.server_name}': {e}"
             logger.error(error_msg)
             return "function", [{"type": "text", "text": error_msg}]
+    
+    def _run_sync_in_thread(self, kwargs):
+        """Run async method in thread with new event loop."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(self._execute_async(**kwargs))
+        finally:
+            loop.close()
     
     async def aexecute(self, **kwargs) -> Any:
         """

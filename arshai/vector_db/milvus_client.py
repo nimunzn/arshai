@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import asyncio
 import os
 from typing import List, Dict, Any, Type, Optional, Callable
 from pymilvus import Collection, CollectionSchema, DataType, FieldSchema, connections, utility
@@ -18,12 +19,12 @@ logging.basicConfig(
 
 
 class MilvusClient(IVectorDBClient):
-    def __init__(self):
-
-        self.host = os.getenv("MILVUS_HOST")
-        self.port = os.getenv("MILVUS_PORT")
-        self.db_name = os.getenv("MILVUS_DB_NAME")
-        self.batch_size = int(os.getenv("MILVUS_BATCH_SIZE", "50"))
+    def __init__(self, host: str = "localhost", port: int = 19530, **kwargs):
+        # Support both parameter-based and environment-based configuration
+        self.host = host or os.getenv("MILVUS_HOST", "localhost")
+        self.port = port or int(os.getenv("MILVUS_PORT", "19530"))
+        self.db_name = kwargs.get("db_name") or os.getenv("MILVUS_DB_NAME", "default")
+        self.batch_size = kwargs.get("batch_size") or int(os.getenv("MILVUS_BATCH_SIZE", "50"))
         self.logger = logging.getLogger('MilvusClient')
     
     # ----------------------
@@ -606,3 +607,103 @@ class MilvusClient(IVectorDBClient):
         """
         self.logger.info(f"Delete entity with filter: {filter_expr}")
         return self._with_collection(config, self._delete_by_expr, filter_expr)
+    
+    # ----------------------
+    # Async Methods (Non-blocking using executor pattern)
+    # ----------------------
+    
+    async def search_by_vector_async(self, config: ICollectionConfig, query_vectors, search_field=None,
+                                   expr=None, output_fields=None, limit=10, search_params=None, **kwargs):
+        """
+        Asynchronous vector search using executor pattern to avoid blocking the event loop.
+        
+        Args:
+            config: Collection configuration
+            query_vectors: Query vectors for similarity search
+            search_field: Field to search in (defaults to config.dense_field)
+            expr: Filter expression for search
+            output_fields: Fields to return in results
+            limit: Maximum number of results to return
+            search_params: Additional search parameters
+            **kwargs: Additional arguments
+            
+        Returns:
+            List of search results with distances and entities
+        """
+        return await asyncio.to_thread(
+            self.search_by_vector,
+            config=config,
+            query_vectors=query_vectors,
+            search_field=search_field,
+            expr=expr,
+            output_fields=output_fields,
+            limit=limit,
+            search_params=search_params,
+            **kwargs
+        )
+    
+    async def hybrid_search_async(self, config: ICollectionConfig, dense_vectors=None, sparse_vectors=None,
+                                expr=None, output_fields=None, limit=10, search_params=None):
+        """
+        Asynchronous hybrid search using executor pattern to avoid blocking the event loop.
+        
+        Args:
+            config: Collection configuration
+            dense_vectors: Dense query vectors for similarity search
+            sparse_vectors: Sparse query vectors for keyword search
+            expr: Filter expression for search
+            output_fields: Fields to return in results
+            limit: Maximum number of results to return
+            search_params: Additional search parameters
+            
+        Returns:
+            List of search results with distances and entities
+        """
+        return await asyncio.to_thread(
+            self.hybrid_search,
+            config=config,
+            dense_vectors=dense_vectors,
+            sparse_vectors=sparse_vectors,
+            expr=expr,
+            output_fields=output_fields,
+            limit=limit,
+            search_params=search_params
+        )
+    
+    async def insert_entity_async(self, config: ICollectionConfig, entity, embeddings):
+        """
+        Asynchronous entity insertion using executor pattern to avoid blocking the event loop.
+        
+        Args:
+            config: Collection configuration
+            entity: Entity data to insert
+            embeddings: Embeddings for the entity
+            
+        Returns:
+            Result of the insertion operation
+        """
+        return await asyncio.to_thread(
+            self.insert_entity,
+            config=config,
+            entity=entity,
+            embeddings=embeddings
+        )
+    
+    async def insert_entities_async(self, config: ICollectionConfig, data, embeddings):
+        """
+        Asynchronous batch entity insertion using executor pattern to avoid blocking the event loop.
+        
+        Args:
+            config: Collection configuration
+            data: List of entity data to insert
+            embeddings: List of embeddings for the entities
+            
+        Returns:
+            Result of the batch insertion operation
+        """
+        return await asyncio.to_thread(
+            self.insert_entities,
+            config=config,
+            data=data,
+            embeddings=embeddings
+        )
