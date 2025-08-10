@@ -33,13 +33,14 @@ include = [
 
 [tool.poetry.dependencies]
 python = ">=3.11,<3.13"
-pydantic = "^2.0.0"
-openai = "^1.0.0"
+pydantic = "^2.11.0"
+openai = "^1.54.0"
 pyyaml = "^6.0.1"
-redis = {version = "^5.0.0", optional = true}
-pymilvus = {version = "^2.3.0", optional = true}
+redis = {version = "^5.1.0", optional = true}
+pymilvus = {version = "^2.6.0", optional = true}
 flashrank = {version = "^0.1.0", optional = true}
 aiohttp = "^3.11.16"
+aiofiles = "^24.1.0"
 requests = "^2.32.3"
 voyageai = "^0.3.2"
 pdf2image = "^1.17.0"
@@ -67,9 +68,10 @@ redis = ["redis"]
 milvus = ["pymilvus"]
 rerankers = ["flashrank"]
 gemini = ["google-genai", "google-auth"]
+async = ["aiofiles"]
 observability = ["opentelemetry-api", "opentelemetry-sdk", "opentelemetry-exporter-otlp-proto-grpc", "opentelemetry-exporter-otlp-proto-http"]
 docs = ["sphinx", "sphinx-rtd-theme", "sphinx-autodoc-typehints", "myst-parser", "sphinx-copybutton", "sphinxcontrib-mermaid", "furo"]
-all = ["redis", "pymilvus", "flashrank", "google-genai", "google-auth", "opentelemetry-api", "opentelemetry-sdk", "opentelemetry-exporter-otlp-proto-grpc", "opentelemetry-exporter-otlp-proto-http"]
+all = ["redis", "pymilvus", "flashrank", "aiofiles", "google-genai", "google-auth", "opentelemetry-api", "opentelemetry-sdk", "opentelemetry-exporter-otlp-proto-grpc", "opentelemetry-exporter-otlp-proto-http"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.0.0"

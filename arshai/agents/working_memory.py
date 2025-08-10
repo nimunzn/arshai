@@ -117,7 +117,17 @@ Keep the memory:
         current_memory = ""
         if self.memory_manager:
             try:
-                memory_data = await self.memory_manager.retrieve({"conversation_id": conversation_id})
+                # Use proper IMemoryInput structure and async method
+                from arshai.core.interfaces.imemorymanager import IMemoryInput, ConversationMemoryType
+                
+                memory_input = IMemoryInput(
+                    conversation_id=conversation_id,
+                    memory_type=ConversationMemoryType.WORKING_MEMORY
+                )
+                
+                # Use async method - all implementations now have retrieve_async
+                memory_data = await self.memory_manager.retrieve_async(memory_input)
+                
                 if memory_data:
                     current_memory = memory_data[0].working_memory if hasattr(memory_data[0], 'working_memory') else str(memory_data[0])
                     logger.debug(f"WorkingMemoryAgent: Retrieved existing memory for conversation {conversation_id}")
@@ -183,11 +193,22 @@ Please generate an updated working memory that incorporates the new information 
         # Store updated memory if memory manager is available
         if self.memory_manager and conversation_id:
             try:
-                await self.memory_manager.store({
-                    "conversation_id": conversation_id,
-                    "working_memory": updated_memory,
-                    "metadata": input.metadata
-                })
+                # Use proper IMemoryInput structure and async method
+                from arshai.core.interfaces.imemorymanager import IWorkingMemory
+                
+                # Create proper working memory data structure
+                working_memory_data = IWorkingMemory(working_memory=updated_memory)
+                
+                store_input = IMemoryInput(
+                    conversation_id=conversation_id,
+                    memory_type=ConversationMemoryType.WORKING_MEMORY,
+                    data=[working_memory_data],
+                    metadata=input.metadata
+                )
+                
+                # Use async method - all implementations now have store_async
+                await self.memory_manager.store_async(store_input)
+                
                 logger.info(f"WorkingMemoryAgent: Successfully stored updated memory for conversation {conversation_id}")
             except Exception as e:
                 # Log error and return error status
