@@ -319,9 +319,9 @@ class GeminiClient(BaseLLMClient):
                 original_description = declaration.description or callable_func.__doc__ or name
                 is_background_task = original_description.startswith("BACKGROUND TASK:")
                 
-                # Create enhanced declaration (keeping original description for background tasks)
+                # Create enhanced declaration with the dictionary key as name (not the function name)
                 enhanced_declaration = FunctionDeclaration(
-                    name=declaration.name,
+                    name=name,  # Use the dictionary key as function name
                     description=original_description,
                     parameters=declaration.parameters
                 )
@@ -810,9 +810,19 @@ class GeminiClient(BaseLLMClient):
                     # Add function results to conversation
                     self._add_function_results_to_contents(execution_result, contents)
                     
+                    self.logger.debug(f"execution_result: {execution_result}")
+
                     # Check if we have regular function calls that require conversation continuation
                     regular_results = execution_result.get('regular_results', [])
+
                     if regular_results:
+                        current_turn += 1
+                        continue
+                    
+                    # For background-tasks-only: if no text response collected, continue to get actual answer
+                    background_results = execution_result.get('background_initiated', [])
+                    if background_results and not collected_text:
+                        self.logger.info(f"Turn {current_turn}: Background tasks completed but no text response - continuing for actual answer")
                         current_turn += 1
                         continue
                 
