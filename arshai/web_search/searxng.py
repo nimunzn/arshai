@@ -103,7 +103,7 @@ class SearxNGClient(IWebSearchClient):
         params = self._prepare_params(query, engines, categories, **kwargs)
         
         try:
-            response = requests.get(
+            response = requests.get(  # nosec B113 - timeout is properly configured
                 f"{self.base_url}/search",
                 params=params,
                 timeout=self.config.get('timeout', 10),
