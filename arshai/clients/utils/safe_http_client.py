@@ -75,7 +75,7 @@ class SafeHttpClientFactory:
             safe_http_client = httpx.Client(
                 limits=limits_config,
                 timeout=timeout_config,
-                verify=False,  # SSL verification disabled
+                verify=True,  # SSL verification enabled for security
                 **additional_config
             )
             
@@ -568,7 +568,7 @@ class SafeHttpClientFactory:
                     max_keepalive_connections=25
                 ),
                 timeout=httpx.Timeout(30.0),
-                verify=False  # SSL verification disabled
+                verify=True  # SSL verification enabled for security
             )
             
             return OpenAI(
