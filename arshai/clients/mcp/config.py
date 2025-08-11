@@ -13,12 +13,17 @@ from .exceptions import MCPConfigurationError
 
 @dataclass
 class MCPServerConfig:
-    """Configuration for a single MCP server."""
+    """Configuration for a single MCP server with connection pool support."""
     name: str
     url: str
     timeout: int = 30
     max_retries: int = 3
     description: Optional[str] = None
+    
+    # Connection pool configuration
+    max_connections: int = 10
+    min_connections: int = 1
+    health_check_interval: int = 60
     
     def __post_init__(self):
         """Validate configuration after initialization."""
@@ -36,15 +41,32 @@ class MCPServerConfig:
         
         if self.max_retries < 0:
             raise MCPConfigurationError(f"Max retries cannot be negative for server '{self.name}'")
+        
+        if self.max_connections <= 0:
+            raise MCPConfigurationError(f"Max connections must be positive for server '{self.name}'")
+        
+        if self.min_connections < 0:
+            raise MCPConfigurationError(f"Min connections cannot be negative for server '{self.name}'")
+        
+        if self.min_connections > self.max_connections:
+            raise MCPConfigurationError(f"Min connections cannot exceed max connections for server '{self.name}'")
+        
+        if self.health_check_interval < 0:
+            raise MCPConfigurationError(f"Health check interval cannot be negative for server '{self.name}'")
 
 
 @dataclass 
 class MCPConfig:
-    """Global MCP configuration for all servers."""
+    """Global MCP configuration for all servers with connection pool support."""
     enabled: bool
     servers: List[MCPServerConfig]
     connection_timeout: int = 30
     default_max_retries: int = 3
+    
+    # Global connection pool defaults
+    default_max_connections: int = 10
+    default_min_connections: int = 1
+    default_health_check_interval: int = 60
     
     def __post_init__(self):
         """Validate configuration after initialization."""
@@ -116,12 +138,20 @@ class MCPConfig:
                     server_timeout = server_config.get("timeout", connection_timeout)
                     server_max_retries = server_config.get("max_retries", default_max_retries)
                     
+                    # Connection pool configuration with fallbacks
+                    server_max_connections = server_config.get("max_connections", mcp_config.get("default_max_connections", 10))
+                    server_min_connections = server_config.get("min_connections", mcp_config.get("default_min_connections", 1))
+                    server_health_check_interval = server_config.get("health_check_interval", mcp_config.get("default_health_check_interval", 60))
+                    
                     servers.append(MCPServerConfig(
                         name=server_config["name"],
                         url=server_config["url"],
                         timeout=server_timeout,
                         max_retries=server_max_retries,
-                        description=server_config.get("description")
+                        description=server_config.get("description"),
+                        max_connections=server_max_connections,
+                        min_connections=server_min_connections,
+                        health_check_interval=server_health_check_interval
                     ))
                 except KeyError as e:
                     raise MCPConfigurationError(f"Missing required field in server configuration: {e}")
@@ -137,14 +167,20 @@ class MCPConfig:
                         url=fallback_url,
                         timeout=connection_timeout,
                         max_retries=default_max_retries,
-                        description='Default MCP server from environment variable'
+                        description='Default MCP server from environment variable',
+                        max_connections=mcp_config.get("default_max_connections", 10),
+                        min_connections=mcp_config.get("default_min_connections", 1),
+                        health_check_interval=mcp_config.get("default_health_check_interval", 60)
                     ))
         
         return cls(
             enabled=enabled,
             servers=servers,
             connection_timeout=connection_timeout,
-            default_max_retries=default_max_retries
+            default_max_retries=default_max_retries,
+            default_max_connections=mcp_config.get("default_max_connections", 10),
+            default_min_connections=mcp_config.get("default_min_connections", 1),
+            default_health_check_interval=mcp_config.get("default_health_check_interval", 60)
         )
     
     @classmethod

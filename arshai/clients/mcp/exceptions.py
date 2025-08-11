@@ -52,3 +52,30 @@ class MCPConfigurationError(MCPError):
 class MCPTimeoutError(MCPError):
     """Exception raised when MCP operation times out."""
     pass
+
+
+class ToolNotFoundError(MCPError):
+    """Exception raised when a requested tool is not found."""
+    
+    def __init__(self, message: str, tool_name: str = None, server_name: str = None):
+        super().__init__(message, server_name)
+        self.tool_name = tool_name
+    
+    def __str__(self):
+        base_msg = self.message
+        if self.tool_name:
+            base_msg = f"Tool '{self.tool_name}': {base_msg}"
+        if self.server_name:
+            base_msg = f"[{self.server_name}] {base_msg}"
+        return base_msg
+
+
+# Phase 3: Security Exceptions
+class RateLimitExceededError(MCPError):
+    """Exception raised when rate limits are exceeded."""
+    pass
+
+
+class PermissionDeniedError(MCPError):
+    """Exception raised when user lacks required permissions."""
+    pass
