@@ -442,11 +442,17 @@ class OpenAIClient(BaseLLMClient):
         
         # Handle response based on whether it's structured or not
         if input.structure_type:
-            # For structured output using parse(), extract the parsed content
-            if hasattr(response, 'parsed') and response.parsed:
-                return {"llm_response": response.parsed, "usage": usage}
+            # For structured output using parse(), extract the parsed content from choices[0].message.parsed
+            if (hasattr(response, 'choices') and response.choices and 
+                len(response.choices) > 0 and hasattr(response.choices[0], 'message') and 
+                hasattr(response.choices[0].message, 'parsed') and response.choices[0].message.parsed is not None):
+                
+                parsed_result = response.choices[0].message.parsed
+                self.logger.debug(f"Successfully parsed structured response: {type(parsed_result)}")
+                return {"llm_response": parsed_result, "usage": usage}
             else:
                 # Fallback for failed structured output
+                self.logger.error("Failed to extract parsed structured response from OpenAI response")
                 return {"llm_response": f"Failed to generate structured response of type {input.structure_type.__name__}", "usage": usage}
         else:
             # Handle regular text response
@@ -475,6 +481,10 @@ class OpenAIClient(BaseLLMClient):
             all_functions.update(input.regular_functions)
         if input.background_tasks:
             all_functions.update(input.background_tasks)
+            
+            # Add specific instruction for background tasks to ensure they are called
+            background_instructions = "\n\nIMPORTANT: You MUST use the available background task functions for any administrative actions, logging, or notifications. These functions should be called in addition to providing your response to the user."
+            messages[0]["content"] += background_instructions
         
         if all_functions:
             openai_tools.extend(self._convert_callables_to_provider_format(all_functions))
@@ -549,6 +559,14 @@ class OpenAIClient(BaseLLMClient):
                 
                 # Return text response
                 if message.content:
+                    # If we have background tasks but no function calls were made, try once more with stronger instruction
+                    if input.background_tasks and current_turn == 0:
+                        self.logger.warning(f"Turn {current_turn}: Background tasks available but not called. Trying again with stronger instruction.")
+                        messages.append({"role": "assistant", "content": message.content})
+                        messages.append({"role": "user", "content": "Please use the available background task functions as specified in the system instructions."})
+                        current_turn += 1
+                        continue
+                    
                     self.logger.info(f"Turn {current_turn}: Received text response")
                     return {"llm_response": message.content, "usage": accumulated_usage}
                 

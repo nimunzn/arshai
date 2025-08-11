@@ -1,13 +1,3 @@
-"""Unit tests for the OpenAIClient."""
-
-import json
-import os
-import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
-
-from arshai.core.interfaces import ILLMConfig, ILLMInput, LLMInputType
-from arshai.llms.openai import OpenAIClient
-
 """
 Pytest test suite for OpenAI LLM client.
 Tests both chat and stream methods with identical inputs for direct comparison.
@@ -199,34 +189,8 @@ TEST_CASES = {
     
     "math_tools": {
         "system_prompt": "You are a helpful mathematical assistant. Use the provided tools when you need to perform calculations. After getting the results, provide a clear explanation of what was calculated.",
-        "user_message": "Calculate 5 to the power of 2, then multiply the result by 3. do it step by step not all at once, first calculate the power then based on its data calculate the multiply, do not call both at once while you dont have the result of the first. ",
-        "tools": [
-            {
-                "name": "power",
-                "description": "Calculate base raised to the power of exponent",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "base": {"type": "number", "description": "Base number"},
-                        "exponent": {"type": "number", "description": "Exponent number"}
-                    },
-                    "required": ["base", "exponent"]
-                }
-            },
-            {
-                "name": "multiply",
-                "description": "Multiply two numbers together",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "a": {"type": "number", "description": "First number"},
-                        "b": {"type": "number", "description": "Second number"}
-                    },
-                    "required": ["a", "b"]
-                }
-            }
-        ],
-        "functions": {
+        "user_message": "Calculate 5 to the power of 2, then multiply the result by 3. do it step by step not all at once, first calculate the power then based on its data calculate the multiply, do not call both at once while you dont have the result of the first.",
+        "regular_functions": {
             "power": power_function,
             "multiply": multiply_function
         },
@@ -238,34 +202,8 @@ TEST_CASES = {
     
     "parallel_tools": {
         "system_prompt": "You are a mathematical assistant. Use the provided tools to perform multiple calculations simultaneously when requested.",
-        "user_message": "Calculate these operations: 3 to the power of 2, 4 to the power of 2, and multiply 6 by 7. You should call multiple functions at once, do not call each one separately. call all at once and decide for next step by the resuts",
-        "tools": [
-            {
-                "name": "power",
-                "description": "Calculate base raised to the power of exponent",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "base": {"type": "number", "description": "Base number"},
-                        "exponent": {"type": "number", "description": "Exponent number"}
-                    },
-                    "required": ["base", "exponent"]
-                }
-            },
-            {
-                "name": "multiply",
-                "description": "Multiply two numbers together",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "a": {"type": "number", "description": "First number"},
-                        "b": {"type": "number", "description": "Second number"}
-                    },
-                    "required": ["a", "b"]
-                }
-            }
-        ],
-        "functions": {
+        "user_message": "Calculate these operations: 3 to the power of 2, 4 to the power of 2, and multiply 6 by 7. You can call multiple functions at once.",
+        "regular_functions": {
             "power": power_function,
             "multiply": multiply_function
         },
@@ -283,7 +221,6 @@ TEST_CASES = {
         "min_matches": 2  # Expect answer + background task initiation
     }
 }
-
 
 # Helper function for flexible pattern matching
 def validate_patterns_flexible(text: str, patterns: list, min_matches: int, test_name: str = "") -> bool:
@@ -508,8 +445,7 @@ class TestOpenAIClient:
         chat_input = ILLMInput(
             system_prompt=test_data["system_prompt"],
             user_message=test_data["user_message"],
-            tools_list=test_data["tools"],
-            callable_functions=test_data["functions"],
+            regular_functions=test_data["regular_functions"],
             structure_type=test_data["chat_structure"],
             max_turns=10
         )
@@ -550,8 +486,7 @@ class TestOpenAIClient:
         stream_input = ILLMInput(
             system_prompt=test_data["system_prompt"],
             user_message=test_data["user_message"],
-            tools_list=test_data["tools"],
-            callable_functions=test_data["functions"],
+            regular_functions=test_data["regular_functions"],
             structure_type=test_data["stream_structure"],
             max_turns=10
         )
@@ -607,8 +542,7 @@ class TestOpenAIClient:
         chat_input = ILLMInput(
             system_prompt=test_data["system_prompt"],
             user_message=test_data["user_message"],
-            tools_list=test_data["tools"],
-            callable_functions=test_data["functions"],
+            regular_functions=test_data["regular_functions"],
             max_turns=5
         )
         
@@ -644,8 +578,7 @@ class TestOpenAIClient:
         stream_input = ILLMInput(
             system_prompt=test_data["system_prompt"],
             user_message=test_data["user_message"],
-            tools_list=test_data["tools"],
-            callable_functions=test_data["functions"],
+            regular_functions=test_data["regular_functions"],
             max_turns=5
         )
         
