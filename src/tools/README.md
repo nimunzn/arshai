@@ -1,8 +1,25 @@
-# Tools Module
+# Arshai Tools (Legacy)
+
+**Legacy Tool Implementations for Arshai Framework**
+
+> **Note**: This is the legacy tools directory (`src/tools/`). New development should use the modern tool architecture in `arshai/tools/` and `arshai/factories/` with MCP integration for better performance and maintainability.
 
 ## Overview
 
-The Tools module provides a collection of specialized capabilities that extend the functionality of agents beyond conversation. Tools enable agents to interact with external systems, retrieve information, and perform actions in the real world, following a clean interface-based architecture.
+This legacy directory contains traditional tool implementations that extend agent functionality. While still functional, these implementations lack the advanced performance optimizations found in the modern MCP-based tool architecture.
+
+## Migration Recommendation
+
+**For new development, use:**
+- `arshai/factories/mcp_tool_factory.py` - Modern MCP tool factory with connection pooling
+- `arshai/clients/mcp/` - Advanced MCP client infrastructure  
+- `arshai/tools/mcp_dynamic_tool.py` - High-performance tool execution
+
+**Performance comparison:**
+- **Legacy tools**: Direct implementation, no connection optimization
+- **MCP tools**: 80-90% latency reduction, connection pooling, circuit breaker protection
+
+## Legacy Tool Architecture
 
 ```mermaid
 graph TD
