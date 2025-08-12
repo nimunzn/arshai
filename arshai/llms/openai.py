@@ -773,7 +773,15 @@ class OpenAIClient(BaseLLMClient):
                                 
                                 function_name = current_tool_call["function"]["name"]
                                 
-                                    # Regular function - execute progressively
+                                # Skip structure functions - they should be handled separately, not as regular functions
+                                if (input.structure_type and 
+                                    function_name.lower() == input.structure_type.__name__.lower()):
+                                    self.logger.debug(f"Skipping structure function {function_name} from progressive execution")
+                                    continue
+                                
+                                self.logger.debug(f"Executing function {function_name} with args: {current_tool_call["function"]["arguments"]}")
+
+                                # Regular function - execute progressively
                                 function_call = FunctionCall(
                                     name=function_name,
                                     args=json.loads(current_tool_call["function"]["arguments"]) if current_tool_call["function"]["arguments"] else {},
