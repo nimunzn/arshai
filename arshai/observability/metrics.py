@@ -24,7 +24,7 @@ from .config import ObservabilityConfig
 
 @dataclass
 class TimingData:
-    """Container for timing measurements."""
+    """Container for timing measurements and OpenInference attributes."""
     start_time: float = field(default_factory=time.time)
     first_token_time: Optional[float] = None
     last_token_time: Optional[float] = None
@@ -34,6 +34,21 @@ class TimingData:
     total_tokens: int = 0
     thinking_tokens: int = 0
     tool_calling_tokens: int = 0
+    
+    # OpenInference attributes
+    input_value: Optional[str] = None
+    output_value: Optional[str] = None
+    input_mime_type: str = "application/json"
+    output_mime_type: str = "application/json"
+    input_messages: Optional[List[Dict[str, Any]]] = None
+    output_messages: Optional[List[Dict[str, Any]]] = None
+    invocation_parameters: Optional[Dict[str, Any]] = None
+    function_call: Optional[Dict[str, Any]] = None
+    
+    # Cost tracking
+    prompt_cost: Optional[float] = None
+    completion_cost: Optional[float] = None
+    total_cost: Optional[float] = None
     
     @property
     def time_to_first_token(self) -> Optional[float]:
@@ -358,7 +373,7 @@ class MetricsCollector:
         """
         attributes = {
             "llm.provider": provider,
-            "llm.model": model,
+            "llm.model_name": model,  # Renamed to match OpenInference
         }
         
         # Add custom attributes from config
