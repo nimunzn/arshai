@@ -799,7 +799,7 @@ class OpenAIClient(BaseLLMClient):
                                         self.logger.error(f"Progressive execution failed for {function_call.name}: {str(e)}")
                 
                 self.logger.debug(f"Turn {current_turn}: Stream ended. Processed {chunk_count} chunks. "
-                               f"Tool calls: {len(tool_calls_in_progress)}, Text collected: {len(collected_text)} chars, "
+                               f"Tool calls: {len(tool_calls_in_progress)}, Text collected: {len(collected_text)} or {len(structured_response)} chars, "
                                f"Progressive tasks: {len(streaming_state.active_function_tasks)}")
                 
                 # Progressive streaming: gather results from executed functions
@@ -832,7 +832,11 @@ class OpenAIClient(BaseLLMClient):
                         current_turn += 1
                         continue
                 
-                
+                    background_initiated = execution_result.get('background_initiated', [])
+                    if background_initiated and (not structured_response and not collected_text):
+                        current_turn += 1
+                        continue
+
                 # Stream completed for this turn
                 self.logger.debug(f"Turn {current_turn}: Stream completed")
                 break
