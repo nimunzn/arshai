@@ -1601,11 +1601,293 @@ class DomainSpecificAgent(BaseAgent):
         
         result = await self.llm_client.chat(llm_input)
         return self._format_domain_response(result)
+## Observability and Monitoring
+
+Arshai provides enterprise-grade observability for production AI systems with comprehensive OpenTelemetry integration and zero-fallback monitoring.
+
+### 🎯 Key Features
+
+- **Zero-Fallback Monitoring**: Always capture the 4 critical LLM metrics without any fallback mechanisms
+- **OpenTelemetry Native**: Export to any OTLP-compatible backend (Jaeger, Prometheus, Datadog, New Relic)
+- **Phoenix AI Observability**: Advanced LLM interaction monitoring with comprehensive input/output tracing
+- **Automatic Factory Integration**: Zero-code observability through intelligent factory wrapping
+- **Real-time Input/Output Capture**: Automatic capture of prompts, responses, and usage metrics
+- **LLM Usage Data Integration**: Accurate token counting from LLM response usage data
+- **Streaming Observability**: Real-time token-level timing for streaming responses
+- **Non-Intrusive Design**: Zero side effects on LLM calls with graceful degradation
+- **Production-Ready**: Comprehensive configuration, privacy controls, and performance optimization
+
+### 📊 The Four Key Metrics
+
+Every LLM interaction automatically captures these critical performance metrics:
+
+| Metric | Description | Use Case |
+|--------|-------------|----------|
+| `llm_time_to_first_token_seconds` | Latency from request start to first token | User experience, response time SLAs |
+| `llm_time_to_last_token_seconds` | Total response generation time | End-to-end performance monitoring |
+| `llm_duration_first_to_last_token_seconds` | Token generation duration | Throughput analysis, model performance |
+| `llm_completion_tokens` | Accurate completion token count | Cost tracking, usage monitoring |
+
+### 🏗️ Architecture
+
+```mermaid
+graph TD
+    A[LLM Calls] --> B[Observable Factory]
+    B --> C[Observability Manager]
+    C --> D[Metrics Collector]
+    C --> E[Trace Exporter]
+    C --> F[Phoenix Client]
+    D --> G[OpenTelemetry Collector]
+    E --> G
+    F --> H[Phoenix AI Platform]
+    G --> I[Jaeger/Zipkin]
+    G --> J[Prometheus]
+    G --> K[DataDog/New Relic]
+    J --> L[Grafana Dashboards]
+    
+    subgraph "Automatic Capture"
+        M[Input Messages]
+        N[Output Responses]
+        O[Token Usage]
+        P[Timing Data]
+    end
+    
+    B --> M
+    B --> N
+    B --> O
+    B --> P
+```
+
+### 🚀 Quick Setup
+
+#### 1. Basic Configuration
+
+```yaml
+# config.yaml
+observability:
+  service_name: "my-ai-service"
+  track_token_timing: true
+  otlp_endpoint: "http://localhost:4317"
+  
+  # Phoenix AI Observability
+  phoenix_enabled: true
+  phoenix_endpoint: "http://localhost:6006"
+  
+  # Privacy and data capture
+  log_prompts: true
+  log_responses: true
+```
+
+#### 2. Automatic Factory Integration
+
+```python
+from arshai.config.settings import Settings
+from arshai.core.interfaces.illm import ILLMInput
+
+# Settings automatically detects observability configuration
+settings = Settings()
+
+# Create LLM - observability is automatically enabled if configured
+llm = settings.create_llm()  
+
+# All calls are automatically instrumented with zero configuration
+input_data = ILLMInput(
+    system_prompt="You are a helpful assistant.",
+    user_message="Hello!"
+)
+
+response = llm.chat_completion(input_data)
+
+# Automatic capture includes:
+# ✅ Input messages (system prompt + user message)
+# ✅ Output response (full LLM response)
+# ✅ Usage metrics (prompt/completion/total tokens)
+# ✅ Timing data (first token, last token, total duration)
+# ✅ Invocation parameters (model, temperature, provider)
+# ✅ Span naming (llm.chat_completion not llm.<lambda>)
 ```
 
 ## Complete Examples & Use Cases
 
 ### Production-Ready Examples
+```bash
+# Start complete observability stack
+cd tests/e2e/observability/
+docker-compose up -d
+
+# Access observability platforms:
+# Phoenix AI Platform: http://localhost:6006 (LLM interactions, input/output tracing)
+# Jaeger Traces: http://localhost:16686 (distributed tracing)
+# Prometheus Metrics: http://localhost:9090 (metrics and queries)
+# Grafana Dashboards: http://localhost:3000 (visualization)
+```
+
+### 📈 Supported Backends
+
+#### AI Observability Platforms
+- **Phoenix AI Platform**: Advanced LLM interaction monitoring with input/output tracing
+- **Arize AI**: Enterprise LLM observability and evaluation platform
+
+#### Metrics Backends
+- **Prometheus** + Grafana
+- **DataDog** (via OTLP)
+- **New Relic** (via OTLP)
+- **AWS CloudWatch** (via OTLP)
+- **Azure Monitor** (via OTLP)
+- **Google Cloud Monitoring** (via OTLP)
+
+#### Tracing Backends
+- **Jaeger**
+- **Zipkin**
+- **DataDog APM**
+- **New Relic Distributed Tracing**
+- **AWS X-Ray**
+- **Azure Application Insights**
+
+### 🔧 Advanced Configuration
+
+#### Provider-Specific Settings
+
+```yaml
+observability:
+  provider_configs:
+    openai:
+      track_token_timing: true
+    anthropic:
+      track_token_timing: true
+    google:
+      track_token_timing: false  # Disable for specific providers
+```
+
+#### Privacy and Security
+
+```yaml
+observability:
+  # Privacy controls (recommended for production)
+  log_prompts: false
+  log_responses: false
+  max_prompt_length: 1000
+  max_response_length: 1000
+  
+  # Custom attributes (avoid sensitive data)
+  custom_attributes:
+    team: "ai-platform"
+    environment: "production"
+```
+
+#### Performance Tuning
+
+```yaml
+observability:
+  # High-throughput settings
+  metric_export_interval: 30
+  trace_sampling_rate: 0.05  # 5% sampling
+  max_span_attributes: 64
+  
+  # Async processing for better performance
+  non_intrusive: true
+```
+
+### 🧪 Testing and Development
+
+#### End-to-End Test Suite
+
+```bash
+# Complete observability testing with real backends
+cd tests/e2e/observability/
+export OPENAI_API_KEY="your-key"
+./run_test.sh
+
+# Tests verify:
+# ✅ All 4 key metrics collected
+# ✅ OTLP export working
+# ✅ Multiple provider support
+# ✅ Streaming observability
+# ✅ No side effects on LLM calls
+```
+
+#### Development Setup
+
+```yaml
+# Development configuration
+observability:
+  service_name: "arshai-dev"
+  environment: "development"
+  
+  # Debug settings
+  log_prompts: true
+  log_responses: true
+  trace_sampling_rate: 1.0  # 100% sampling
+  
+  # Local OTLP collector
+  otlp_endpoint: "http://localhost:4317"
+```
+
+### 📚 Production Deployment
+
+#### Docker Compose for Production
+
+The `tests/e2e/observability/docker-compose.yml` provides a production-ready template:
+
+```bash
+# Production observability stack
+docker-compose -f tests/e2e/observability/docker-compose.yml up -d
+
+# Includes:
+# - OpenTelemetry Collector
+# - Jaeger for distributed tracing
+# - Prometheus for metrics collection
+# - Grafana with pre-built dashboards
+```
+
+#### Kubernetes Deployment
+
+```yaml
+# Example Kubernetes configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: observability-config
+data:
+  config.yaml: |
+    observability:
+      service_name: "arshai-prod"
+      otlp_endpoint: "http://otel-collector:4317"
+      track_token_timing: true
+      log_prompts: false
+      log_responses: false
+```
+
+### 🔍 Monitoring and Alerting
+
+#### Key Metrics to Monitor
+
+```promql
+# Prometheus queries for monitoring
+# Average time to first token
+histogram_quantile(0.95, rate(llm_time_to_first_token_seconds_bucket[5m]))
+
+# Token throughput
+rate(llm_completion_tokens[5m])
+
+# Error rate
+rate(llm_requests_failed[5m]) / rate(llm_requests_total[5m])
+
+# Active requests
+llm_active_requests
+```
+
+#### Grafana Dashboard
+
+Pre-built dashboards available in `tests/e2e/observability/dashboards/`:
+- **LLM Performance**: Token timing metrics with percentiles
+- **Cost Tracking**: Token usage and provider distribution
+- **Error Monitoring**: Failed requests and error patterns
+- **Throughput Analysis**: Request rates and concurrent processing
+
+### 🔗 Integration Examples
+
+#### With Existing Monitoring
 
 #### **Customer Support System**
 ```python

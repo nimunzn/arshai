@@ -61,6 +61,17 @@ class ObservabilityConfig(IDTO):
     otlp_headers: Dict[str, str] = Field(default_factory=dict, description="OTLP headers")
     otlp_timeout: int = Field(default=10, description="OTLP timeout in seconds")
     
+    # Arize-specific configuration (optional)
+    arize_space_id: Optional[str] = Field(default=None, description="Arize space ID")
+    arize_api_key: Optional[str] = Field(default=None, description="Arize API key")
+    arize_project_name: Optional[str] = Field(default=None, description="Arize project name")
+    
+    # Phoenix AI Observability configuration
+    phoenix_enabled: bool = Field(default=True, description="Enable Phoenix AI observability")
+    phoenix_endpoint: Optional[str] = Field(default=None, description="Phoenix endpoint URL")
+    phoenix_api_key: Optional[str] = Field(default=None, description="Phoenix API key")
+    phoenix_project_name: Optional[str] = Field(default=None, description="Phoenix project name")
+    
     # Non-intrusive mode
     non_intrusive: bool = Field(default=True, description="Enable non-intrusive observability mode")
     
@@ -150,6 +161,18 @@ class ObservabilityConfig(IDTO):
         if "ARSHAI_NON_INTRUSIVE" in os.environ:
             config_dict["non_intrusive"] = os.environ.get("ARSHAI_NON_INTRUSIVE", "true").lower() == "true"
         
+        # Arize configuration
+        config_dict["arize_space_id"] = os.environ.get("ARIZE_SPACE_ID")
+        config_dict["arize_api_key"] = os.environ.get("ARIZE_API_KEY") 
+        config_dict["arize_project_name"] = os.environ.get("ARIZE_PROJECT_NAME")
+        
+        # Phoenix configuration
+        if "PHOENIX_ENABLED" in os.environ:
+            config_dict["phoenix_enabled"] = os.environ.get("PHOENIX_ENABLED", "true").lower() == "true"
+        config_dict["phoenix_endpoint"] = os.environ.get("PHOENIX_ENDPOINT")
+        config_dict["phoenix_api_key"] = os.environ.get("PHOENIX_API_KEY")
+        config_dict["phoenix_project_name"] = os.environ.get("PHOENIX_PROJECT_NAME")
+        
         return cls(**config_dict)
     
     @classmethod
@@ -220,6 +243,47 @@ class ObservabilityConfig(IDTO):
             Provider-specific configuration
         """
         return self.provider_configs.get(provider, {})
+    
+    def configure_for_arize(self, space_id: str, api_key: str, project_name: Optional[str] = None) -> "ObservabilityConfig":
+        """Configure for Arize with automatic OTLP endpoint setup.
+        
+        Args:
+            space_id: Arize space ID
+            api_key: Arize API key
+            project_name: Optional project name (defaults to service_name)
+            
+        Returns:
+            New ObservabilityConfig configured for Arize
+        """
+        config_dict = self.model_dump()
+        config_dict.update({
+            "arize_space_id": space_id,
+            "arize_api_key": api_key,
+            "arize_project_name": project_name or self.service_name,
+            "otlp_endpoint": "https://otlp.arize.com/v1/traces",
+            "otlp_headers": {
+                "space-id": space_id,
+                "api-key": api_key
+            }
+        })
+        return self.__class__(**config_dict)
+    
+    @classmethod
+    def from_arize_env(cls) -> "ObservabilityConfig":
+        """Create configuration specifically from Arize environment variables.
+        
+        Returns:
+            ObservabilityConfig configured for Arize
+        """
+        space_id = os.environ.get("ARIZE_SPACE_ID")
+        api_key = os.environ.get("ARIZE_API_KEY")
+        project_name = os.environ.get("ARIZE_PROJECT_NAME")
+        
+        if not space_id or not api_key:
+            raise ValueError("ARIZE_SPACE_ID and ARIZE_API_KEY environment variables are required")
+        
+        config = cls.from_environment()
+        return config.configure_for_arize(space_id, api_key, project_name)
 
     class Config:
         """Pydantic configuration."""
