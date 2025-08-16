@@ -1,13 +1,13 @@
 # Arshai Observability System
 
-A comprehensive, non-intrusive observability layer for the Arshai LLM framework with Phoenix AI integration. This system provides production-ready monitoring, metrics collection, and tracing for LLM interactions with automatic input/output capture, provider detection, and token-level performance analysis.
+A comprehensive, non-intrusive observability layer for the Arshai LLM framework using OpenTelemetry. This system provides production-ready monitoring, metrics collection, and tracing for LLM interactions with automatic input/output capture, provider detection, and token-level performance analysis. Data flows through OTLP collectors to observability platforms like Phoenix, Jaeger, and Prometheus.
 
 ## 🚀 Key Features
 
 ### Core Metrics (As Requested)
 - ✅ **`llm_time_to_first_token_seconds`** - Time from request start to first token
 - ✅ **`llm_time_to_last_token_seconds`** - Time from request start to last token  
-- ✅ **`llm_duration_first_to_last_token_seconds`** - Duration from first token to last token
+- ✅ **`llm_token_count.total`** - Total tokens processed (OpenInference standard)
 - ✅ **`llm_completion_tokens`** - Count of completion tokens generated
 
 ### Advanced Features
@@ -17,15 +17,10 @@ A comprehensive, non-intrusive observability layer for the Arshai LLM framework 
 - **YAML Configuration Support**: Configure via `config.yaml` as per Arshai patterns
 - **Token Counting**: Accurate token counting from LLM responses
 - **Streaming Support**: Token-level timing for streaming responses
-- **Phoenix AI Integration**: Advanced LLM interaction monitoring with comprehensive input/output tracing
-- **Automatic Factory Integration**: Zero-code observability through intelligent factory wrapping
-- **Real-time Input/Output Capture**: Automatic capture of prompts, responses, and usage metrics
-- **Non-Intrusive Design**: Zero side effects on LLM calls with graceful degradation
-- **Automatic Provider Detection**: Works with OpenAI, Azure, Anthropic, Google Gemini
-- **YAML Configuration Support**: Configure via `config.yaml` as per Arshai patterns
-- **Streaming Support**: Token-level timing for streaming responses with automatic capture
 - **OpenTelemetry Compatible**: Full OTLP export support
-- **Proper Span Naming**: Correct span names like `llm.chat_completion` instead of `llm.<lambda>`
+- **Privacy Controls**: Configurable content logging with `log_prompts` and `log_responses`
+- **Content Truncation**: Automatic content truncation with `max_prompt_length` and `max_response_length`
+- **OTLP Pipeline**: Data flows through OTLP collectors to Phoenix, Jaeger, and Prometheus
 
 ## 📁 Architecture
 
@@ -33,18 +28,14 @@ A comprehensive, non-intrusive observability layer for the Arshai LLM framework 
 arshai/observability/
 ├── __init__.py                 # Main exports
 ├── config.py                   # Configuration support
-├── core.py                     # ObservabilityManager
+├── core.py                     # ObservabilityManager with OTLP export
 ├── metrics.py                  # MetricsCollector with key metrics
 ├── decorators.py               # DEPRECATED - decorator approach
 ├── factory_integration.py     # DEPRECATED - factory approach
 ├── helpers.py                  # DEPRECATED - helper functions
-├── config.py                   # YAML configuration support with Phoenix
-├── core.py                     # ObservabilityManager with Phoenix client
-├── metrics.py                  # MetricsCollector with key metrics
-├── factory_integration.py     # Automatic LLMFactory integration
-├── decorators.py               # Auto-capture decorators
-├── phoenix_client.py           # Phoenix AI platform integration
 └── README.md                   # This file
+
+Data Flow: Arshai → OTLP Collector → Phoenix/Jaeger/Prometheus
 ```
 
 ## 🔧 Installation
@@ -56,11 +47,11 @@ The observability system is included with Arshai but requires optional dependenc
 pip install opentelemetry-api opentelemetry-sdk
 pip install opentelemetry-exporter-otlp-proto-grpc
 
-# Install Phoenix AI observability
-pip install arize-phoenix openinference-semantic-conventions
-
 # Or install all observability features
 pip install arshai[observability]
+
+# Note: Phoenix runs as a separate container/service
+# Data flows: Arshai → OTLP Collector → Phoenix
 ```
 
 ## ⚡ Quick Start
@@ -82,9 +73,15 @@ llm_config = ILLMConfig(
 # 2. Create observability configuration
 obs_config = ObservabilityConfig(
     service_name="my-ai-app",
-    track_token_timing=True,
+    otlp_endpoint="http://localhost:4320",  # OTLP collector endpoint
+    trace_requests=True,
     collect_metrics=True,
-    log_prompts=False  # For privacy
+    track_token_timing=True,
+    # Privacy controls
+    log_prompts=False,  # Don't store sensitive prompts
+    log_responses=False,  # Don't store responses
+    max_prompt_length=1000,
+    max_response_length=1000
 )
 
 # 3. Create observability manager
@@ -128,16 +125,12 @@ observability:
   collect_metrics: true
   track_token_timing: true
   
-  # Phoenix AI Platform integration
-  phoenix_enabled: true
-  phoenix_endpoint: "http://localhost:6006"
-  
-  # OpenTelemetry export
-  otlp_endpoint: "http://localhost:4317"
+  # OpenTelemetry export to collector
+  otlp_endpoint: "http://localhost:4320"
   
   # Privacy controls for input/output capture
-  log_prompts: true   # Enable for development
-  log_responses: true # Enable for development
+  log_prompts: false   # Disable for privacy
+  log_responses: false # Disable for privacy
   max_prompt_length: 1000
   max_response_length: 1000
 ```
