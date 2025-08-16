@@ -327,7 +327,32 @@ class BaseLLMClient(ILLM, ABC):
                 self.config.model,
                 "chat"
             ) as timing_data:
+                # Capture input content for Phoenix display (respecting privacy controls)
+                if self.observability_manager.config.log_prompts:
+                    prompt_content = f"System: {input.system_prompt}\nUser: {input.user_message}"
+                    # Truncate if needed
+                    if len(prompt_content) > self.observability_manager.config.max_prompt_length:
+                        prompt_content = prompt_content[:self.observability_manager.config.max_prompt_length] + "..."
+                    timing_data.input_value = prompt_content
+                    timing_data.input_mime_type = "text/plain"
+                    timing_data.input_messages = [
+                        {"role": "system", "content": input.system_prompt},
+                        {"role": "user", "content": input.user_message}
+                    ]
+                
                 result = await self._execute_chat(input)
+                
+                # Capture output content for Phoenix display (respecting privacy controls)
+                if 'llm_response' in result and self.observability_manager.config.log_responses:
+                    response_content = result['llm_response']
+                    # Truncate if needed
+                    if len(response_content) > self.observability_manager.config.max_response_length:
+                        response_content = response_content[:self.observability_manager.config.max_response_length] + "..."
+                    timing_data.output_value = response_content
+                    timing_data.output_mime_type = "text/plain"
+                    timing_data.output_messages = [
+                        {"role": "assistant", "content": response_content}
+                    ]
                 
                 # Record token timing - for non-streaming, we record completion timing
                 timing_data.record_token()
@@ -390,7 +415,21 @@ class BaseLLMClient(ILLM, ABC):
                 self.config.model,
                 "stream"
             ) as timing_data:
+                # Capture input content for Phoenix display (respecting privacy controls)
+                if self.observability_manager.config.log_prompts:
+                    prompt_content = f"System: {input.system_prompt}\nUser: {input.user_message}"
+                    # Truncate if needed
+                    if len(prompt_content) > self.observability_manager.config.max_prompt_length:
+                        prompt_content = prompt_content[:self.observability_manager.config.max_prompt_length] + "..."
+                    timing_data.input_value = prompt_content
+                    timing_data.input_mime_type = "text/plain"
+                    timing_data.input_messages = [
+                        {"role": "system", "content": input.system_prompt},
+                        {"role": "user", "content": input.user_message}
+                    ]
+                
                 first_token_recorded = False
+                accumulated_response = ""
                 
                 async for chunk in self._execute_stream(input):
                     # Record first token timing - simple approach like decorators
@@ -401,11 +440,27 @@ class BaseLLMClient(ILLM, ABC):
                     # Record each token - every chunk represents token generation progress
                     timing_data.record_token()
                     
+                    # Accumulate streaming response content for Phoenix display
+                    if 'llm_response' in chunk and chunk['llm_response']:
+                        accumulated_response += chunk['llm_response']
+                    
                     # Extract usage data directly from chunk (we know our own structure)
                     if 'usage' in chunk and chunk['usage']:
                         await self.observability_manager.record_usage_data(timing_data, chunk['usage'])
                     
                     yield chunk
+                
+                # Capture final output content for Phoenix display (respecting privacy controls)
+                if accumulated_response and self.observability_manager.config.log_responses:
+                    response_content = accumulated_response
+                    # Truncate if needed
+                    if len(response_content) > self.observability_manager.config.max_response_length:
+                        response_content = response_content[:self.observability_manager.config.max_response_length] + "..."
+                    timing_data.output_value = response_content
+                    timing_data.output_mime_type = "text/plain"
+                    timing_data.output_messages = [
+                        {"role": "assistant", "content": response_content}
+                    ]
                     
                 # Record final timing if we had tokens
                 if first_token_recorded:

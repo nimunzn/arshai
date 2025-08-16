@@ -224,30 +224,26 @@ class MetricsCollector:
         self.llm_time_to_first_token = self.meter.create_histogram(
             name="llm_time_to_first_token_seconds",
             description="Time from request start to first token",
-            unit="s",
-            explicit_bucket_boundaries=self.config.histogram_boundaries
+            unit="s"
         )
         
         self.llm_time_to_last_token = self.meter.create_histogram(
             name="llm_time_to_last_token_seconds", 
             description="Time from request start to last token",
-            unit="s",
-            explicit_bucket_boundaries=self.config.histogram_boundaries
+            unit="s"
         )
         
         self.llm_duration_first_to_last_token = self.meter.create_histogram(
             name="llm_duration_first_to_last_token_seconds",
             description="Duration from first token to last token", 
-            unit="s",
-            explicit_bucket_boundaries=self.config.histogram_boundaries
+            unit="s"
         )
         
         # Additional timing metrics
         self.llm_request_duration = self.meter.create_histogram(
             name="llm_request_duration_seconds",
             description="Total LLM request duration",
-            unit="s", 
-            explicit_bucket_boundaries=self.config.histogram_boundaries
+            unit="s"
         )
         
         # Throughput metrics
@@ -399,8 +395,9 @@ class MetricsCollector:
             return
         
         attributes = self.create_attributes(provider, model, **extra_attributes)
-        # Use asyncio.run for sync context
-        timing_data = asyncio.run(self.record_request_start(attributes))
+        # Create timing data synchronously to avoid event loop issues
+        timing_data = TimingData()
+        timing_data.start_time = time.time()
         success = False
         
         try:
@@ -410,7 +407,11 @@ class MetricsCollector:
             self.logger.error(f"LLM request failed: {e}")
             raise
         finally:
-            asyncio.run(self.record_request_end(attributes, timing_data, success))
+            # Record metrics synchronously
+            try:
+                self._record_metrics_sync(attributes, timing_data, success)
+            except Exception as e:
+                self.logger.error(f"Failed to record metrics: {e}")
     
     @asynccontextmanager
     async def async_track_request(self, provider: str, model: str, **extra_attributes):
@@ -438,6 +439,38 @@ class MetricsCollector:
             raise
         finally:
             await self.record_request_end(attributes, timing_data, success)
+    
+    def _record_metrics_sync(self, attributes: Dict[str, Any], timing_data: TimingData, success: bool):
+        """Record metrics synchronously without async operations."""
+        try:
+            # Record timing metrics
+            if timing_data.time_to_first_token is not None:
+                self.llm_time_to_first_token.record(timing_data.time_to_first_token, attributes)
+            
+            if timing_data.time_to_last_token is not None:
+                self.llm_time_to_last_token.record(timing_data.time_to_last_token, attributes)
+            
+            if timing_data.duration_first_to_last_token is not None:
+                self.llm_duration_first_to_last_token.record(timing_data.duration_first_to_last_token, attributes)
+            
+            # Record request duration
+            self.llm_request_duration.record(timing_data.total_duration, attributes)
+            
+            # Record token counts
+            if timing_data.input_tokens > 0:
+                self.llm_input_tokens.add(timing_data.input_tokens, attributes)
+            if timing_data.output_tokens > 0:
+                self.llm_output_tokens.add(timing_data.output_tokens, attributes)
+            if timing_data.total_tokens > 0:
+                self.llm_tokens_total.add(timing_data.total_tokens, attributes)
+            
+            # Record request counts
+            self.llm_requests_total.add(1, attributes)
+            if not success:
+                self.llm_requests_failed.add(1, attributes)
+                
+        except Exception as e:
+            self.logger.error(f"Failed to record sync metrics: {e}")
     
     def is_enabled(self) -> bool:
         """Check if metrics collection is enabled."""
