@@ -1,11 +1,17 @@
+#!/usr/bin/env python3
 """
-Example demonstrating comprehensive LLM observability with the new constructor-based approach.
+Arshai LLM Observability Example
 
-This example shows how to:
-1. Configure observability for LLM providers using constructor injection
-2. Use any LLM client with automatic observability integration
-3. Collect and export metrics and traces
-4. Monitor token-level timing and performance
+This example demonstrates how to use the Arshai observability system 
+with OpenTelemetry integration. Data flows through OTLP collectors
+to observability platforms like Phoenix, Jaeger, and Prometheus.
+
+Features demonstrated:
+- Privacy controls with log_prompts and log_responses
+- Content truncation with max_prompt_length and max_response_length
+- OTLP export to observability collector
+- Token counting and timing metrics
+- Both streaming and non-streaming calls
 """
 
 import asyncio
@@ -28,28 +34,25 @@ logger = logging.getLogger(__name__)
 async def main():
     """Main example function demonstrating LLM observability."""
     
-    # 1. Configure observability
+    # 1. Configure observability with OTLP collector pipeline
     observability_config = ObservabilityConfig(
         service_name="arshai-llm-example",
         service_version="1.0.0",
         environment="development",
         
-        # Enable tracing and metrics
-        trace_enabled=True,
-        metrics_enabled=True,
+        # OTLP collector endpoint (data flows to Phoenix, Jaeger, Prometheus)
+        otlp_endpoint="http://localhost:4320",  # OTLP gRPC collector port
         
-        # Token timing configuration (KEY METRICS)
+        # Core observability features
+        trace_requests=True,
+        collect_metrics=True,
         track_token_timing=True,
         
-        # Privacy settings (be careful with these in production)
-        log_prompts=True,  # Set to False in production for privacy
-        log_responses=True,  # Set to False in production for privacy
-        max_prompt_length=500,
-        max_response_length=500,
-        
-        # OTLP configuration (optional - remove if not using OTLP)
-        # otlp_endpoint="http://localhost:4317",  # Uncomment if using Jaeger/OTLP
-        # otlp_headers={"Authorization": "Bearer your-token"},
+        # Privacy controls (important for production)
+        log_prompts=False,  # DISABLED - don't store sensitive prompts
+        log_responses=False,  # DISABLED - don't store sensitive responses
+        max_prompt_length=1000,
+        max_response_length=1000,
         
         # Custom attributes for all traces
         custom_attributes={
@@ -194,7 +197,8 @@ async def main():
     logger.info(f"Service: {observability_config.service_name}")
     logger.info(f"Environment: {observability_config.environment}")
     logger.info(f"Token timing enabled: {observability_config.track_token_timing}")
-    logger.info(f"Tracing enabled: {observability_config.trace_enabled}")
+    logger.info(f"Tracing enabled: {observability_config.trace_requests}")
+    logger.info(f"Privacy controls: prompts={observability_config.log_prompts}, responses={observability_config.log_responses}")
     
     # 10. Example with different providers
     logger.info("=== Example 5: Multiple Providers with Same Observability ===")
@@ -269,8 +273,8 @@ def run_production_example():
         environment=os.environ.get("ENVIRONMENT", "production"),
         
         # Production settings
-        trace_enabled=True,
-        metrics_enabled=True,
+        trace_requests=True,
+        collect_metrics=True,
         track_token_timing=True,
         
         # Privacy-conscious production settings

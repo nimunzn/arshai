@@ -18,7 +18,6 @@ except ImportError:
 
 from .config import ObservabilityConfig
 from .metrics import MetricsCollector, TimingData
-from .phoenix_client import PhoenixClient
 
 
 class ObservabilityManager:
@@ -31,7 +30,6 @@ class ObservabilityManager:
         # Initialize components
         self.metrics_collector: Optional[MetricsCollector] = None
         self.tracer: Optional[Tracer] = None
-        self.phoenix_client: Optional[PhoenixClient] = None
         
         self._initialize_components()
         
@@ -47,9 +45,6 @@ class ObservabilityManager:
         if self.config.trace_requests and OTEL_AVAILABLE:
             self._initialize_tracing()
         
-        # Initialize Phoenix AI observability
-        if self.config.phoenix_enabled:
-            self.phoenix_client = PhoenixClient(self.config)
     
     def _initialize_tracing(self):
         """Initialize OpenTelemetry tracing."""
@@ -294,9 +289,6 @@ class ObservabilityManager:
             if timing_data.time_to_last_token is not None:
                 span.set_attribute("llm.time_to_last_token", timing_data.time_to_last_token)
             
-            if timing_data.duration_first_to_last_token is not None:
-                span.set_attribute("llm.duration_first_to_last_token", timing_data.duration_first_to_last_token)
-            
             span.set_attribute("llm.total_duration", timing_data.total_duration)
             
             # Token counts - using LLM client naming convention
@@ -306,6 +298,8 @@ class ObservabilityManager:
                 span.set_attribute("llm.usage.output_tokens", timing_data.output_tokens)
             if timing_data.total_tokens > 0:
                 span.set_attribute("llm.usage.total_tokens", timing_data.total_tokens)
+                # OpenInference standard cumulative tokens parameter
+                span.set_attribute("llm.token_count.total", timing_data.total_tokens)
             if timing_data.thinking_tokens > 0:
                 span.set_attribute("llm.usage.thinking_tokens", timing_data.thinking_tokens)
             if timing_data.tool_calling_tokens > 0:
@@ -374,9 +368,6 @@ class ObservabilityManager:
                 if hasattr(tracer_provider, 'shutdown'):
                     tracer_provider.shutdown()
             
-            # Shutdown Phoenix client
-            if self.phoenix_client:
-                self.phoenix_client.shutdown()
             
             self.logger.info("Observability manager shutdown completed")
         except Exception as e:
