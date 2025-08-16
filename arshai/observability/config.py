@@ -66,12 +66,6 @@ class ObservabilityConfig(IDTO):
     arize_api_key: Optional[str] = Field(default=None, description="Arize API key")
     arize_project_name: Optional[str] = Field(default=None, description="Arize project name")
     
-    # Phoenix AI Observability configuration
-    phoenix_enabled: bool = Field(default=True, description="Enable Phoenix AI observability")
-    phoenix_endpoint: Optional[str] = Field(default=None, description="Phoenix endpoint URL")
-    phoenix_api_key: Optional[str] = Field(default=None, description="Phoenix API key")
-    phoenix_project_name: Optional[str] = Field(default=None, description="Phoenix project name")
-    
     # Non-intrusive mode
     non_intrusive: bool = Field(default=True, description="Enable non-intrusive observability mode")
     
@@ -166,12 +160,7 @@ class ObservabilityConfig(IDTO):
         config_dict["arize_api_key"] = os.environ.get("ARIZE_API_KEY") 
         config_dict["arize_project_name"] = os.environ.get("ARIZE_PROJECT_NAME")
         
-        # Phoenix configuration
-        if "PHOENIX_ENABLED" in os.environ:
-            config_dict["phoenix_enabled"] = os.environ.get("PHOENIX_ENABLED", "true").lower() == "true"
-        config_dict["phoenix_endpoint"] = os.environ.get("PHOENIX_ENDPOINT")
-        config_dict["phoenix_api_key"] = os.environ.get("PHOENIX_API_KEY")
-        config_dict["phoenix_project_name"] = os.environ.get("PHOENIX_PROJECT_NAME")
+        # Phoenix configuration removed - data flows through OTLP collector
         
         return cls(**config_dict)
     
