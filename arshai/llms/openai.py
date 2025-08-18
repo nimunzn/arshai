@@ -779,7 +779,7 @@ class OpenAIClient(BaseLLMClient):
                                     self.logger.debug(f"Skipping structure function {function_name} from progressive execution")
                                     continue
                                 
-                                self.logger.debug(f"Executing function {function_name} with args: {current_tool_call["function"]["arguments"]}")
+                                self.logger.debug(f"Executing function {function_name} with args: {current_tool_call['function']['arguments']}")
 
                                 # Regular function - execute progressively
                                 function_call = FunctionCall(
