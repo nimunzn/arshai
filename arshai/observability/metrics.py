@@ -2,7 +2,6 @@
 
 import time
 import logging
-import traceback
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 from contextlib import contextmanager, asynccontextmanager
@@ -406,7 +405,6 @@ class MetricsCollector:
             success = True
         except Exception as e:
             self.logger.error(f"LLM request failed: {e}")
-            self.logger.error(f"LLM request traceback: {traceback.format_exc()}")
             raise
         finally:
             # Record metrics synchronously
@@ -414,7 +412,6 @@ class MetricsCollector:
                 self._record_metrics_sync(attributes, timing_data, success)
             except Exception as e:
                 self.logger.error(f"Failed to record metrics: {e}")
-                self.logger.error(f"Metrics recording traceback: {traceback.format_exc()}")
     
     @asynccontextmanager
     async def async_track_request(self, provider: str, model: str, **extra_attributes):
