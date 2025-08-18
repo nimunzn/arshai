@@ -498,6 +498,7 @@ class TestOpenAIClient:
         
         async for chunk in client.stream(stream_input):
             stream_chunks.append(chunk)
+            logger.info(f"Stream Chunk: {chunk}")
             if chunk.get("llm_response") and chunk["llm_response"] is not None:
                 content_chunks_received += 1
                 if isinstance(chunk["llm_response"], dict) and all(key in chunk["llm_response"] for key in ["operation", "result", "explanation"]):

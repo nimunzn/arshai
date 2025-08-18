@@ -574,6 +574,7 @@ class OpenAIClient(BaseLLMClient):
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens if self.config.max_tokens else None,
             "stream": True,
+            "stream_options": {"include_usage": True}
         }
         
         # Add structure function if needed
@@ -689,11 +690,14 @@ class OpenAIClient(BaseLLMClient):
                     "max_tokens": self.config.max_tokens if self.config.max_tokens else None,
                     "tools": openai_tools if openai_tools else None,
                     "stream": True,
+                    "stream_options": {"include_usage": True}
+
                 }
                 
                 # Progressive streaming state management
                 streaming_state = StreamingExecutionState()
                 collected_text = ""
+                structured_response = None  # Track structured response
                 chunk_count = 0
                 # Track tool calls for progressive processing
                 tool_calls_in_progress = {}
@@ -762,7 +766,7 @@ class OpenAIClient(BaseLLMClient):
                                             # Use parse_to_structure for consistent parsing
                                             structured_response = parse_to_structure(fixed_json, input.structure_type)
                                             # Yield the structured response immediately
-                                            yield {"llm_response": structured_response, "usage": accumulated_usage}
+                                            yield {"llm_response": structured_response}
                                             # Mark that we've yielded a structure response
                                     except Exception as e:
                                         self.logger.error(f"Failed to parse structure output progressively: {str(e)}")
@@ -797,9 +801,11 @@ class OpenAIClient(BaseLLMClient):
                                         streaming_state.add_function_task(task, function_call)
                                     except Exception as e:
                                         self.logger.error(f"Progressive execution failed for {function_call.name}: {str(e)}")
-                
+                yield {"llm_response": None, "usage": accumulated_usage}
+
                 self.logger.debug(f"Turn {current_turn}: Stream ended. Processed {chunk_count} chunks. "
-                               f"Tool calls: {len(tool_calls_in_progress)}, Text collected: {len(collected_text)} or {len(structured_response)} chars, "
+                               f"Tool calls: {len(tool_calls_in_progress)}, Text collected: {len(collected_text)} chars, "
+                               f"Structured response: {structured_response is not None}, "
                                f"Progressive tasks: {len(streaming_state.active_function_tasks)}")
                 
                 # Progressive streaming: gather results from executed functions
@@ -857,5 +863,5 @@ class OpenAIClient(BaseLLMClient):
                 "usage": accumulated_usage,
             }
         else:
-            # Final usage yield if no structured response was returned
+            # Final usage yield - always yield usage at the end
             yield {"llm_response": None, "usage": accumulated_usage}
