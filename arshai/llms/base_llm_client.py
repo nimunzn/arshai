@@ -441,8 +441,10 @@ class BaseLLMClient(ILLM, ABC):
                     timing_data.record_token()
                     
                     # Accumulate streaming response content for Phoenix display
-                    if 'llm_response' in chunk and chunk['llm_response']:
-                        accumulated_response += chunk['llm_response']
+                    if chunk.get('llm_response',None):
+                        response = chunk['llm_response']
+                        # Ensure accumulated_response is always a string
+                        accumulated_response = str(response) if not isinstance(response, str) else response
                     
                     # Extract usage data directly from chunk (we know our own structure)
                     if 'usage' in chunk and chunk['usage']:
