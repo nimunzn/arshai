@@ -125,7 +125,7 @@ class MetricsCollector:
             # Set up metric reader and provider
             if self.config.otlp_endpoint:
                 # Auto-detect protocol based on endpoint
-                if '/v1/metrics' in self.config.otlp_endpoint or self.config.otlp_endpoint.endswith(':4318'):
+                if '/v1/metrics' in self.config.otlp_endpoint or self.config.otlp_endpoint.startswith('http'):
                     # HTTP endpoint detected
                     try:
                         from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter as HTTPMetricExporter
@@ -158,7 +158,15 @@ class MetricsCollector:
             else:
                 meter_provider = MeterProvider(resource=resource)
             
-            metrics.set_meter_provider(meter_provider)
+            # Check if a MeterProvider is already set to avoid the override error
+            current_provider = metrics.get_meter_provider()
+            if not hasattr(current_provider, '_readers'):
+                # No real MeterProvider is set, safe to set ours
+                metrics.set_meter_provider(meter_provider)
+            else:
+                self.logger.warning("MeterProvider already set, using existing provider")
+                meter_provider = current_provider
+            
             self.meter = metrics.get_meter(__name__)
             
             # Create metrics
