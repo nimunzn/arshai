@@ -160,11 +160,13 @@ class MetricsCollector:
             
             # Check if a MeterProvider is already set to avoid the override error
             current_provider = metrics.get_meter_provider()
-            if not hasattr(current_provider, '_readers'):
+            # Check if current provider is the default NoOpMeterProvider or already configured 
+            if type(current_provider).name == 'NoOpMeterProvider':
                 # No real MeterProvider is set, safe to set ours
                 metrics.set_meter_provider(meter_provider)
+                self.logger.info("MeterProvider successfully initialized")
             else:
-                self.logger.warning("MeterProvider already set, using existing provider")
+                self.logger.info("MeterProvider already configured, using existing provider")
                 meter_provider = current_provider
             
             self.meter = metrics.get_meter(__name__)
