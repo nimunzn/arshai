@@ -60,7 +60,7 @@ class ObservabilityManager:
             # Set up OTLP exporter if endpoint is configured
             if self.config.otlp_endpoint:
                 # Auto-detect protocol based on endpoint
-                if '/v1/traces' in self.config.otlp_endpoint or self.config.otlp_endpoint.endswith(':4318'):
+                if '/v1/traces' in self.config.otlp_endpoint or self.config.otlp_endpoint.startswith('http'):
                     # HTTP endpoint detected
                     try:
                         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter as HTTPSpanExporter
@@ -88,7 +88,15 @@ class ObservabilityManager:
                 span_processor = BatchSpanProcessor(otlp_exporter)
                 tracer_provider.add_span_processor(span_processor)
             
-            trace.set_tracer_provider(tracer_provider)
+            # Check if a TracerProvider is already set to avoid the override error
+            current_provider = trace.get_tracer_provider()
+            if not hasattr(current_provider, 'add_span_processor'):
+                # No real TracerProvider is set, safe to set ours
+                trace.set_tracer_provider(tracer_provider)
+            else:
+                self.logger.warning("TracerProvider already set, using existing provider")
+                tracer_provider = current_provider
+            
             self.tracer = trace.get_tracer(__name__)
             
             self.logger.info("Tracing initialized")
