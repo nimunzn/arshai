@@ -9,7 +9,7 @@ import os
 import json
 import time
 import inspect
-from typing import Dict, Any, TypeVar, Type, Union, AsyncGenerator, List, get_type_hints, Callable
+from typing import Dict, Any, TypeVar, Type, Union, AsyncGenerator, List, Callable, Optional
 from openai import OpenAI
 from openai.types.responses import ParsedResponse
 
@@ -27,10 +27,9 @@ T = TypeVar("T")
 # Structure instructions template used across methods
 STRUCTURE_INSTRUCTIONS_TEMPLATE = """
 
-You MUST ALWAYS use the {function_name} tool/function to format your response.
-Your response ALWAYS MUST be returned using the tool, independently of what the message or response are.
-You MUST ALWAYS CALL TOOLS FOR RETURNING RESPONSE
-The response Must be in JSON format"""
+You MUST use structured output formatting as specified.
+Follow the required structure format exactly.
+The response must be properly formatted according to the schema."""
 
 
 class OpenAIClient(BaseLLMClient):
@@ -41,29 +40,29 @@ class OpenAIClient(BaseLLMClient):
     the new BaseLLMClient framework with minimal code and maximum clarity.
     """
     
-    def __del__(self):
+    def __del__(self) -> None:
         """Cleanup connections when the client is destroyed."""
         self.close()
     
-    def __enter__(self):
+    def __enter__(self) -> 'OpenAIClient':
         """Context manager entry."""
         return self
     
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
         """Context manager exit - cleanup connections."""
         self.close()
         return False
     
-    async def __aenter__(self):
+    async def __aenter__(self) -> 'OpenAIClient':
         """Async context manager entry."""
         return self
     
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
         """Async context manager exit - cleanup connections."""
         self.close()
         return False
     
-    def close(self):
+    def close(self) -> None:
         """Close the OpenAI client and cleanup connections."""
         try:
             # Close the underlying httpx client if it exists
@@ -125,7 +124,7 @@ class OpenAIClient(BaseLLMClient):
     # PROVIDER-SPECIFIC HELPER METHODS
     # ========================================================================
 
-    def _accumulate_usage_safely(self, current_usage: Dict[str, Any], accumulated_usage: Dict[str, Any] = None) -> Dict[str, Any]:
+    def _accumulate_usage_safely(self, current_usage: Dict[str, Any], accumulated_usage: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Safely accumulate usage metadata without in-place mutations.
         
@@ -157,6 +156,18 @@ class OpenAIClient(BaseLLMClient):
             {"role": "user", "content": input.user_message}
         ]
 
+    def _convert_messages_to_response_input(self, messages: List[Dict]) -> List[Dict]:
+        """Convert OpenAI-style messages to OpenAI ResponseInputParam format."""
+        response_input = []
+        for message in messages:
+            response_message = {
+                "type": "message",
+                "role": message["role"],
+                "content": message["content"]
+            }
+            response_input.append(response_message)
+        return response_input
+
     def _convert_callables_to_provider_format(self, functions: Dict[str, Callable]) -> List[Dict[str, Any]]:
         """
         Convert python callables to OpenAI-compatible function declarations.
@@ -170,84 +181,89 @@ class OpenAIClient(BaseLLMClient):
         """
         openai_tools = []
         
-        # Convert callable functions (pure conversion, no execution metadata)
+        # Handle callable Python functions
         for name, func in functions.items():
             try:
-                # Get function signature
-                sig = inspect.signature(func)
+                # Check if it's a background task by docstring
+                original_description = func.__doc__ or f"Execute {name} function"
+                is_background_task = original_description.startswith("BACKGROUND TASK:")
                 
-                # Extract description from docstring
-                description = func.__doc__ or f"Execute {name} function"
-                description = description.strip()
-                
-                # Build parameters schema
-                properties = {}
-                required = []
-                
-                for param_name, param in sig.parameters.items():
-                    # Skip 'self' parameter
-                    if param_name == 'self':
-                        continue
-                        
-                    # Get parameter type
-                    param_type = "string"  # default
-                    if param.annotation != inspect.Parameter.empty:
-                        param_type = self._python_type_to_json_schema_type(param.annotation)
-                    
-                    # Build parameter definition
-                    param_def = {
-                        "type": param_type,
-                        "description": f"{param_name} parameter"
-                    }
-                    
-                    # Add to required if no default value
-                    if param.default == inspect.Parameter.empty:
-                        required.append(param_name)
-                    else:
-                        param_def["description"] += f" (default: {param.default})"
-                    
-                    properties[param_name] = param_def
-                
-                # Create function definition
-                function_def = {
-                    "name": name,
-                    "description": description,
-                    "parameters": {
-                        "type": "object",
-                        "properties": properties,
-                        "required": required,
-                        "additionalProperties": False
-                    }
-                }
-                
-                # Add to tools list
-                openai_tools.append({
-                    "type": "function",
-                    "function": function_def
-                })
-                
+                function_def = self._python_function_to_openai_function(func, name, is_background=is_background_task)
+                function_def["type"] = "function"  # Add type to create flat structure
+                openai_tools.append(function_def)
             except Exception as e:
-                self.logger.warning(f"Failed to inspect function {name}: {str(e)}")
-                # Return basic fallback schema
-                try:
-                    openai_tools.append({
-                        "type": "function",
-                        "function": {
-                            "name": name,
-                            "description": f"Execute {name} function",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {},
-                                "required": [],
-                                "additionalProperties": False
-                            }
-                        }
-                    })
-                except Exception:
-                    # Skip this function entirely if even fallback fails
-                    continue
+                self.logger.warning(f"Failed to convert function {name}: {str(e)}")
+                continue
         
         return openai_tools
+
+    def _python_function_to_openai_function(self, func, name: str, is_background: bool = False) -> Dict[str, Any]:  # noqa: ARG002
+        """Convert a Python function to OpenAI function format using introspection."""
+        try:
+            # Get function signature
+            sig = inspect.signature(func)
+            
+            # Extract description from docstring (keeping original for background tasks)
+            description = func.__doc__ or f"Execute {name} function"
+            description = description.strip()
+            
+            # Build parameters schema
+            properties = {}
+            required = []
+            
+            for param_name, param in sig.parameters.items():
+                # Skip 'self' parameter
+                if param_name == 'self':
+                    continue
+                    
+                # Get parameter type
+                param_type = "string"  # default
+                if param.annotation != inspect.Parameter.empty:
+                    param_type = self._python_type_to_json_schema_type(param.annotation)
+                
+                # Build parameter definition
+                param_def = {
+                    "type": param_type,
+                    "description": f"{param_name} parameter"
+                }
+                
+                # For OpenAI strict mode, ALL parameters must be in required array
+                required.append(param_name)
+                
+                # Add default value info to description
+                if param.default != inspect.Parameter.empty:
+                    param_def["description"] += f" (default: {param.default})"
+                
+                properties[param_name] = param_def
+            
+            return {
+                "name": name,
+                "description": description,
+                "parameters": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
+                    "additionalProperties": False
+                },
+                "strict": True
+            }
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to inspect function {name}: {str(e)}")
+            # Return basic fallback schema
+            description = func.__doc__ or f"Execute {name} function"
+            
+            return {
+                "name": name,
+                "description": description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": False
+                },
+                "strict": True
+            }
 
     def _python_type_to_json_schema_type(self, python_type) -> str:
         """Convert Python type annotations to JSON schema types."""
@@ -266,94 +282,40 @@ class OpenAIClient(BaseLLMClient):
         else:
             return "string"  # Default to string for unknown types
 
-    def _create_structure_function_openai(self, structure_type: Type[T]) -> Dict[str, Any]:
-        """Create OpenAI function definition for structured output."""
-        function_name = structure_type.__name__.lower()
-        description = structure_type.__doc__ or f"Create a {structure_type.__name__} response"
-        
-        # Get the JSON schema from the structure type
-        if hasattr(structure_type, 'model_json_schema'):
-            # Pydantic model
-            schema = structure_type.model_json_schema()
-        elif hasattr(structure_type, '__annotations__'):
-            # TypedDict - build basic schema
-            properties = {}
-            required = []
-            for field_name, field_type in structure_type.__annotations__.items():
-                properties[field_name] = {
-                    "type": self._python_type_to_json_schema_type(field_type),
-                    "description": f"{field_name} field"
-                }
-                required.append(field_name)
-            schema = {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-                "additionalProperties": False
-            }
-        else:
-            # Fallback schema
-            schema = {
-                "type": "object",
-                "properties": {},
-                "required": [],
-                "additionalProperties": False
-            }
-        
-        return {
-            "type": "function",
-            "function": {
-                "name": function_name,
-                "description": description,
-                "parameters": schema
-            }
-        }
 
-    def _extract_function_calls_from_response(self, response) -> List:
-        """Extract function calls from OpenAI response."""
-        if hasattr(response, 'choices') and response.choices:
-            message = response.choices[0].message
-            if hasattr(message, 'tool_calls') and message.tool_calls:
-                return message.tool_calls
-        return []
 
-    def _process_function_calls_for_orchestrator(self, tool_calls, input: ILLMInput) -> tuple:
+    def _process_function_calls_for_orchestrator(self, function_calls, input: ILLMInput) -> tuple:
         """
         Process function calls and prepare them for the orchestrator using object-based approach.
         
-        CRITICAL FIX: Uses List[FunctionCall] to handle multiple calls to the same function.
-        This solves the infinite loop issue where dictionary-based approach was dropping duplicate function names.
-        
+        Args:
+            function_calls: Function calls from OpenAI response
+            input: The LLM input
+            
         Returns:
-            Tuple of (function_calls, structured_response)
+            Tuple of (function_calls_list, structured_response)
         """
-        function_calls = []
+        function_calls_list = []
         structured_response = None
         
-        for i, tool_call in enumerate(tool_calls):
-            function_name = tool_call.function.name
+        for i, func_call in enumerate(function_calls):
+            function_name = func_call.name
             try:
-                function_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+                # Extract function args (handles OpenAI response format)
+                if hasattr(func_call, 'arguments'):
+                    function_args = json.loads(func_call.arguments) if func_call.arguments else {}
+                else:
+                    function_args = {}
             except json.JSONDecodeError:
                 self.logger.warning(f"Failed to parse function arguments for {function_name}")
                 function_args = {}
-            
-            # Check if it's the structure function
-            if input.structure_type and function_name == input.structure_type.__name__.lower():
-                try:
-                    structured_response = input.structure_type(**function_args)
-                    self.logger.info(f"Created structured response: {function_name}")
-                    continue  # Don't process structure function as regular function
-                except Exception as e:
-                    self.logger.error(f"Error creating structured response from {function_name}: {str(e)}")
-                    continue
             
             # Create unique call_id to track individual function calls
             call_id = f"{function_name}_{i}"
             
             # Check if it's a background task
             if function_name in (input.background_tasks or {}):
-                function_calls.append(FunctionCall(
+                function_calls_list.append(FunctionCall(
                     name=function_name,
                     args=function_args,
                     call_id=call_id,
@@ -361,7 +323,7 @@ class OpenAIClient(BaseLLMClient):
                 ))
             # Check if it's a regular function
             elif function_name in (input.regular_functions or {}):
-                function_calls.append(FunctionCall(
+                function_calls_list.append(FunctionCall(
                     name=function_name,
                     args=function_args,
                     call_id=call_id,
@@ -370,7 +332,7 @@ class OpenAIClient(BaseLLMClient):
             else:
                 self.logger.warning(f"Function {function_name} not found in available functions or background tasks")
         
-        return function_calls, structured_response
+        return function_calls_list, structured_response
 
 
     # ========================================================================
@@ -379,66 +341,67 @@ class OpenAIClient(BaseLLMClient):
 
     async def _chat_simple(self, input: ILLMInput) -> Dict[str, Any]:
         """Handle simple chat without tools or background tasks."""
-        messages = self._create_openai_messages(input)
+        # Build base context in OpenAI format first
+        messages = [
+            {"role": "system", "content": input.system_prompt},
+            {"role": "user", "content": input.user_message}
+        ]
         
-        # Prepare OpenAI request arguments
+        # Convert to OpenAI ResponseInputParam format
+        response_input = self._convert_messages_to_response_input(messages)
+        
+        # Prepare arguments for responses.parse()
         kwargs = {
             "model": self.config.model,
-            "messages": messages,
+            "input": response_input,
             "temperature": self.config.temperature,
-            "max_tokens": self.config.max_tokens if self.config.max_tokens else None,
+            "max_output_tokens": self.config.max_tokens if self.config.max_tokens else None,
         }
         
-        # Add structure function if needed
+        # Add text_format for structured output if needed
         if input.structure_type:
-            structure_function = self._create_structure_function_openai(input.structure_type)
-            kwargs["tools"] = [structure_function]
-            
-            # Add structure instructions to system prompt
-            function_name = input.structure_type.__name__.lower()
-            kwargs["messages"][0]["content"] += STRUCTURE_INSTRUCTIONS_TEMPLATE.format(function_name=function_name)
+            kwargs["text_format"] = input.structure_type
+            # Add structure instructions to system prompt  
+            response_input[0]["content"] += STRUCTURE_INSTRUCTIONS_TEMPLATE
         
-        # Make the API call
-        response = self._client.chat.completions.create(**kwargs)
+        response: ParsedResponse = self._client.responses.parse(**kwargs)
         
         # Process usage metadata
         usage = self._standardize_usage_metadata(
             response.usage if hasattr(response, 'usage') else None,
             self._get_provider_name(),
             self.config.model,
-            getattr(response, 'id', None)
+            getattr(response, 'id', '') or ''
         )
         
-        # Handle structured output
+        # Handle response based on whether it's structured or not
         if input.structure_type:
-            tool_calls = self._extract_function_calls_from_response(response)
-            if tool_calls:
-                _, structured_response = self._process_function_calls_for_orchestrator(tool_calls, input)
-                if structured_response is not None:
-                    return {"llm_response": structured_response, "usage": usage}
+            # For structured output, extract the parsed content
+            llm_response = None
+            for output_item in response.output:
+                if output_item.type == "message":
+                    for content in output_item.content:
+                        if content.type == "output_text" and hasattr(content, 'parsed'):
+                            llm_response = content.parsed
+                            break
+                    if llm_response:
+                        break
             
-            # Fallback for failed structured output
-            return {"llm_response": f"Failed to generate structured response of type {input.structure_type.__name__}", "usage": usage}
-        
-        # Handle regular text response
-        message = response.choices[0].message
-        return {"llm_response": message.content, "usage": usage}
+            return {"llm_response": llm_response, "usage": usage}
+        else:
+            # For unstructured output, use the output_text property
+            return {"llm_response": response.output_text, "usage": usage}
 
     async def _chat_with_functions(self, input: ILLMInput) -> Dict[str, Any]:
         """Handle complex chat with tools and/or background tasks."""
-        messages = self._create_openai_messages(input)
+        # Build base context and prepare tools
+        messages = [
+            {"role": "system", "content": input.system_prompt},
+            {"role": "user", "content": input.user_message}
+        ]
         
         # Prepare tools for OpenAI
         openai_tools = []
-        
-        # Add structure function if needed
-        if input.structure_type:
-            structure_function = self._create_structure_function_openai(input.structure_type)
-            openai_tools.append(structure_function)
-            
-            # Add structure instructions
-            function_name = input.structure_type.__name__.lower()
-            messages[0]["content"] += STRUCTURE_INSTRUCTIONS_TEMPLATE.format(function_name=function_name)
         
         # Convert all functions using the new unified approach
         all_functions = {}
@@ -450,6 +413,9 @@ class OpenAIClient(BaseLLMClient):
         if all_functions:
             openai_tools.extend(self._convert_callables_to_provider_format(all_functions))
         
+        # Convert to OpenAI ResponseInputParam format
+        response_input = self._convert_messages_to_response_input(messages)
+        
         # Multi-turn conversation for function calling
         current_turn = 0
         accumulated_usage = None
@@ -460,35 +426,39 @@ class OpenAIClient(BaseLLMClient):
             try:
                 start_time = time.time()
                 
-                # Prepare arguments for OpenAI
+                # Prepare arguments for responses.parse()
                 kwargs = {
                     "model": self.config.model,
-                    "messages": messages,
                     "temperature": self.config.temperature,
-                    "max_tokens": self.config.max_tokens if self.config.max_tokens else None,
+                    "max_output_tokens": self.config.max_tokens if self.config.max_tokens else None,
                     "tools": openai_tools if openai_tools else None,
+                    "input": response_input
                 }
                 
-                response = self._client.chat.completions.create(**kwargs)
+                # Add text_format for structured output if needed
+                if input.structure_type:
+                    kwargs["text_format"] = input.structure_type
+                    # Add structure instructions to system prompt
+                    response_input[0]["content"] += STRUCTURE_INSTRUCTIONS_TEMPLATE
+                
+                response = self._client.responses.parse(**kwargs)
                 self.logger.info(f"Response time: {time.time() - start_time:.2f}s")
                 
                 # Process usage metadata using framework standardization
                 if hasattr(response, "usage") and response.usage:
                     current_usage = self._standardize_usage_metadata(
-                        response.usage, self._get_provider_name(), self.config.model, getattr(response, 'id', None)
+                        response.usage, self._get_provider_name(), self.config.model, getattr(response, 'id', '') or ''
                     )
-                    # Use safe accumulation helper
                     accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
                 
-                message = response.choices[0].message
+                # Check for function calls in output
+                function_calls = [output_item for output_item in response.output if output_item.type == "function_call"]
                 
-                # Check for function calls
-                tool_calls = self._extract_function_calls_from_response(response)
-                if tool_calls:
-                    self.logger.info(f"Turn {current_turn}: Found {len(tool_calls)} function calls")
+                if function_calls:
+                    self.logger.info(f"Turn {current_turn}: Found {len(function_calls)} function calls")
                     
                     # Process function calls for orchestrator
-                    function_calls, structured_response = self._process_function_calls_for_orchestrator(tool_calls, input)
+                    function_calls_list, structured_response = self._process_function_calls_for_orchestrator(function_calls, input)
                     
                     # If we got a structured response, return it immediately
                     if structured_response is not None:
@@ -496,10 +466,10 @@ class OpenAIClient(BaseLLMClient):
                         return {"llm_response": structured_response, "usage": accumulated_usage}
                     
                     # Execute functions via orchestrator using new object-based approach
-                    if function_calls:
+                    if function_calls_list:
                         # Create execution input
                         execution_input = FunctionExecutionInput(
-                            function_calls=function_calls,
+                            function_calls=function_calls_list,
                             available_functions=input.regular_functions or {},
                             available_background_tasks=input.background_tasks or {}
                         )
@@ -507,23 +477,40 @@ class OpenAIClient(BaseLLMClient):
                         execution_result = await self._execute_functions_with_orchestrator(execution_input)
                         
                         # Add function results to conversation
-                        self._add_function_results_to_messages(execution_result, messages)
+                        self._add_function_results_to_response_input(execution_result, response_input)
                         
                         # Continue if we have regular functions (need to continue conversation)
-                        regular_function_calls = [call for call in function_calls if not call.is_background]
+                        regular_function_calls = [call for call in function_calls_list if not call.is_background]
                         if regular_function_calls:
                             current_turn += 1
                             continue
                 
-                # Handle structured output expectation
+                # Check for structured response
                 if input.structure_type:
-                    self.logger.warning(f"Turn {current_turn}: Expected structure function call but none received")
-                    return {"llm_response": f"Failed to generate structured response of type {input.structure_type.__name__}", "usage": accumulated_usage}
+                    llm_response = None
+                    for output_item in response.output:
+                        if output_item.type == "message":
+                            for content in output_item.content:
+                                if content.type == "output_text" and hasattr(content, 'parsed'):
+                                    try:
+                                        llm_response = content.parsed
+                                    except Exception:
+                                        is_complete, fixed_json = is_json_complete(content.text)
+                                        if is_complete:
+                                            try:
+                                                llm_response = parse_to_structure(fixed_json, input.structure_type)
+                                            except Exception as e:
+                                                self.logger.error(f"Error parsing structured response: {str(e)}")
+                                                llm_response = content.text
+                    
+                    if llm_response is not None:
+                        self.logger.info(f"Turn {current_turn}: Received structured response")
+                        return {"llm_response": llm_response, "usage": accumulated_usage}
                 
                 # Return text response
-                if message.content:
+                if hasattr(response, 'output_text') and response.output_text:
                     self.logger.info(f"Turn {current_turn}: Received text response")
-                    return {"llm_response": message.content, "usage": accumulated_usage}
+                    return {"llm_response": response.output_text, "usage": accumulated_usage}
                 
             except Exception as e:
                 self.logger.error(f"Error in OpenAI chat_with_functions turn {current_turn}: {str(e)}")
@@ -538,19 +525,20 @@ class OpenAIClient(BaseLLMClient):
             "usage": accumulated_usage,
         }
 
-    def _add_function_results_to_messages(self, execution_result: Dict, messages: List[Dict]) -> None:
-        """Add function execution results to messages in OpenAI chat format."""
-        # Add function results as function messages
+    def _add_function_results_to_response_input(self, execution_result: Dict, response_input: List[Dict]) -> None:
+        """Add function execution results to response_input in OpenAI format."""
+        # Add function results as messages
         for result in execution_result.get('regular_results', []):
-            messages.append({
-                "role": "function",
-                "name": result['name'],
+            response_input.append({
+                "type": "message",
+                "role": "user",
                 "content": f"Function '{result['name']}' called with arguments {result['args']} returned: {result['result']}"
             })
         
         # Add background task notifications
         for bg_message in execution_result.get('background_initiated', []):
-            messages.append({
+            response_input.append({
+                "type": "message",
                 "role": "user",
                 "content": f"Background task initiated: {bg_message}"
             })
@@ -558,112 +546,79 @@ class OpenAIClient(BaseLLMClient):
         # Add completion message if we have results
         if execution_result.get('regular_results'):
             completion_msg = f"All {len(execution_result['regular_results'])} function(s) completed. Please provide your response based on these results."
-            messages.append({
+            response_input.append({
+                "type": "message",
                 "role": "user",
                 "content": completion_msg
             })
 
     async def _stream_simple(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
         """Handle simple streaming without tools or background tasks."""
-        messages = self._create_openai_messages(input)
+        # Build base context in OpenAI format first
+        messages = [
+            {"role": "system", "content": input.system_prompt},
+            {"role": "user", "content": input.user_message}
+        ]
         
-        # Prepare OpenAI request arguments
+        # Convert to OpenAI ResponseInputParam format  
+        response_input = self._convert_messages_to_response_input(messages)
+        
+        # Prepare arguments for responses.stream()
         kwargs = {
             "model": self.config.model,
-            "messages": messages,
+            "input": response_input,
             "temperature": self.config.temperature,
-            "max_tokens": self.config.max_tokens if self.config.max_tokens else None,
-            "stream": True,
-            "stream_options": {"include_usage": True}
+            "max_output_tokens": self.config.max_tokens if self.config.max_tokens else None,
         }
         
-        # Add structure function if needed
+        # Add text_format for structured output if needed
         if input.structure_type:
-            structure_function = self._create_structure_function_openai(input.structure_type)
-            kwargs["tools"] = [structure_function]
-            
-            # Add structure instructions
-            function_name = input.structure_type.__name__.lower()
-            kwargs["messages"][0]["content"] += STRUCTURE_INSTRUCTIONS_TEMPLATE.format(function_name=function_name)
+            sdk_structure_type = convert_typeddict_to_basemodel(input.structure_type)
+            kwargs["text_format"] = sdk_structure_type
+            # Add structure instructions to system prompt
+            response_input[0]["content"] += STRUCTURE_INSTRUCTIONS_TEMPLATE
         
-        # Track usage and collected data
-        accumulated_usage = None
-        collected_text = ""
-        collected_tool_calls = []
-        
-        # Process streaming response
-        for chunk in self._client.chat.completions.create(**kwargs):
-            # Handle usage data if available
-            if hasattr(chunk, 'usage') and chunk.usage is not None:
-                current_usage = self._standardize_usage_metadata(
-                    chunk.usage, self._get_provider_name(), self.config.model
-                )
-                accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
+        # Use proper ResponseStreamManager pattern
+        with self._client.responses.stream(**kwargs) as stream:
+            accumulated_usage = None
+            collected_text = ""
             
-            # Skip chunks without choices
-            if not chunk.choices:
-                continue
+            # Process streaming events
+            for event in stream:
+                if hasattr(event, "response") and hasattr(event.response, "usage") and event.response.usage:
+                    # Usage from ResponseIncompleteEvent or ResponseCompletedEvent
+                    current_usage = self._standardize_usage_metadata(
+                        event.response.usage, self._get_provider_name(), self.config.model
+                    )
+                    accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
+                
+                # Handle text delta events - progressive streaming
+                if "response.output_text.delta" in event.type and hasattr(event, "delta"):
+                    collected_text += event.delta
+                    if not input.structure_type:
+                        yield {"llm_response": collected_text}
+                    else:
+                        is_complete, fixed_json = is_json_complete(collected_text)
+                        if is_complete:
+                            try:
+                                final_response = parse_to_structure(fixed_json, input.structure_type)
+                                yield {"llm_response": final_response}
+                            except ValueError:
+                                pass
             
-            delta = chunk.choices[0].delta
-            
-            # Handle content streaming
-            if hasattr(delta, 'content') and delta.content is not None:
-                collected_text += delta.content
-                if not input.structure_type:
-                    yield {"llm_response": collected_text}
-            
-            # Handle tool calls streaming for structured output
-            if hasattr(delta, 'tool_calls') and delta.tool_calls and input.structure_type:
-                for i, tool_delta in enumerate(delta.tool_calls):
-                    # Initialize or get current tool call
-                    if i >= len(collected_tool_calls):
-                        collected_tool_calls.append({
-                            "id": tool_delta.id or "",
-                            "function": {"name": "", "arguments": ""}
-                        })
-                    
-                    current_tool_call = collected_tool_calls[i]
-                    
-                    # Update tool call with new delta information
-                    if tool_delta.id:
-                        current_tool_call["id"] = tool_delta.id
-                        
-                    if hasattr(tool_delta, 'function'):
-                        if tool_delta.function.name:
-                            current_tool_call["function"]["name"] = tool_delta.function.name
-                            
-                        if tool_delta.function.arguments:
-                            current_tool_call["function"]["arguments"] += tool_delta.function.arguments
-                            
-                            # Try to parse and yield structured response when complete
-                            if current_tool_call["function"]["name"] == input.structure_type.__name__.lower():
-                                is_complete, fixed_json = is_json_complete(current_tool_call["function"]["arguments"])
-                                if is_complete:
-                                    try:
-                                        # Use parse_to_structure for consistency
-                                        structured_response = parse_to_structure(fixed_json, input.structure_type)
-                                        yield {"llm_response": structured_response}
-                                    except Exception:
-                                        continue
-        
-        # Final yield with usage information
-        yield {"llm_response": None, "usage": accumulated_usage}
+            # Final yield with usage information
+            yield {"llm_response": None, "usage": accumulated_usage}
 
     async def _stream_with_functions(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
-        """Handle complex streaming with tools and/or background tasks - full streaming implementation."""
-        messages = self._create_openai_messages(input)
+        """Handle complex streaming with tools and/or background tasks."""
+        # Build base context and prepare tools
+        messages = [
+            {"role": "system", "content": input.system_prompt},
+            {"role": "user", "content": input.user_message}
+        ]
         
         # Prepare tools for OpenAI
         openai_tools = []
-        
-        # Add structure function if needed
-        if input.structure_type:
-            structure_function = self._create_structure_function_openai(input.structure_type)
-            openai_tools.append(structure_function)
-            
-            # Add structure instructions
-            function_name = input.structure_type.__name__.lower()
-            messages[0]["content"] += STRUCTURE_INSTRUCTIONS_TEMPLATE.format(function_name=function_name)
         
         # Convert all functions using the new unified approach
         all_functions = {}
@@ -675,174 +630,167 @@ class OpenAIClient(BaseLLMClient):
         if all_functions:
             openai_tools.extend(self._convert_callables_to_provider_format(all_functions))
         
+        # Convert to OpenAI ResponseInputParam format
+        response_input = self._convert_messages_to_response_input(messages)
+        
         # Multi-turn streaming conversation for function calling  
         current_turn = 0
         accumulated_usage = None
         
         while current_turn < input.max_turns:
             self.logger.info(f"Stream function calling turn: {current_turn}")
+            
             try:
-                # Prepare arguments for streaming
+                # Prepare arguments for responses.stream()
                 kwargs = {
                     "model": self.config.model,
-                    "messages": messages,
                     "temperature": self.config.temperature,
-                    "max_tokens": self.config.max_tokens if self.config.max_tokens else None,
+                    "max_output_tokens": self.config.max_tokens if self.config.max_tokens else None,
                     "tools": openai_tools if openai_tools else None,
-                    "stream": True,
-                    "stream_options": {"include_usage": True}
-
+                    "parallel_tool_calls": True,
+                    "input": response_input
                 }
                 
-                # Progressive streaming state management
-                streaming_state = StreamingExecutionState()
-                collected_text = ""
-                structured_response = None  # Track structured response
-                chunk_count = 0
-                # Track tool calls for progressive processing
-                tool_calls_in_progress = {}
+                # Add text_format for structured output if needed
+                if input.structure_type:
+                    sdk_structure_type = convert_typeddict_to_basemodel(input.structure_type)
+                    kwargs["text_format"] = sdk_structure_type
+                    # Add structure instructions to system prompt
+                    response_input[0]["content"] += STRUCTURE_INSTRUCTIONS_TEMPLATE
                 
-                self.logger.debug(f"Starting progressive stream processing for turn {current_turn}")
-                
-                # Process streaming response with progressive function execution
-                for chunk in self._client.chat.completions.create(**kwargs):
-                    chunk_count += 1
-                    # Handle usage metadata
-                    if hasattr(chunk, 'usage') and chunk.usage is not None:
-                        current_usage = self._standardize_usage_metadata(
-                            chunk.usage, self._get_provider_name(), self.config.model
-                        )
-                        accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
+                # Generate streaming content with tools using responses API
+                with self._client.responses.stream(**kwargs) as stream:
                     
-                    # Skip chunks without choices
-                    if not chunk.choices:
-                        continue
-                    
-                    delta = chunk.choices[0].delta
-                    self.logger.debug(f"Incomming Delta:{delta}")
-                    # Handle content streaming
-                    if hasattr(delta, 'content') and delta.content is not None:
-                        collected_text += delta.content
-                        # For structured output, we only yield content via function calls, not direct content
-                        if not input.structure_type:
-                            yield {"llm_response": collected_text}
-                    
-                    # Handle tool calls streaming with progressive execution
-                    if hasattr(delta, 'tool_calls') and delta.tool_calls:
-                        for tool_delta in delta.tool_calls:
-                            # Use the index from the tool_delta, not enumerate (critical for OpenAI)
-                            tool_index = tool_delta.index
+                    # Progressive streaming state management
+                    streaming_state = StreamingExecutionState()
+                    collected_text = ""
+                    chunk_count = 0
+                    # Track function calls for progressive processing
+                    tool_calls_in_progress = {}
+
+                    self.logger.debug(f"Starting progressive stream processing for turn {current_turn}")
+
+                    # Process streaming response events with progressive function execution
+                    for event in stream:
+                        chunk_count += 1                        
+                        # Handle usage metadata from response completion events
+                        if hasattr(event, "response") and hasattr(event.response, "usage") and event.response.usage:
+                            current_usage = self._standardize_usage_metadata(
+                                event.response.usage, self._get_provider_name(), self.config.model
+                            )
+                            accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
+                        
+                        # Handle function call arguments completion with progressive execution
+                        if event.type == "response.output_item.done" and event.item.type == 'function_call':
+                            # For OpenAI, function calls arrive complete in events
+                            # Track them for progressive execution similar to Azure pattern
+                            call_index = len(tool_calls_in_progress)
                             
-                            # Initialize tool call tracking if needed
-                            if tool_index not in tool_calls_in_progress:
-                                tool_calls_in_progress[tool_index] = {
-                                    "id": "",
-                                    "function": {"name": "", "arguments": ""}
+                            if call_index not in tool_calls_in_progress:
+                                tool_calls_in_progress[call_index] = {
+                                    "function": {
+                                        "name": event.item.name,
+                                        "arguments": event.item.arguments if hasattr(event.item, 'arguments') else "{}"
+                                    },
+                                    "id": f"{event.item.name}_{call_index}"
                                 }
                             
-                            current_tool_call = tool_calls_in_progress[tool_index]
+                            current_tool_call = tool_calls_in_progress[call_index]
                             
-                            # Update tool call with new delta information
-                            if tool_delta.id:
-                                current_tool_call["id"] = tool_delta.id
-                                
-                            if hasattr(tool_delta, 'function'):
-                                if tool_delta.function.name:
-                                    current_tool_call["function"]["name"] = tool_delta.function.name
-                                    
-                                if tool_delta.function.arguments:
-                                    current_tool_call["function"]["arguments"] += tool_delta.function.arguments
-                            
+                            # Check if this is a structure output function
                             if (input.structure_type and 
-                                    current_tool_call["function"]["name"] and 
-                                    current_tool_call["function"]["name"].lower() == input.structure_type.__name__.lower()):
-
-                                    try:
-                                    # For structure functions, double-check JSON completeness
-                                        is_complete, fixed_json = is_json_complete(current_tool_call["function"]["arguments"])
-                                        if not is_complete:
-                                            continue  # Wait for more data
-                                        else:
-                                            # Use parse_to_structure for consistent parsing
-                                            structured_response = parse_to_structure(fixed_json, input.structure_type)
-                                            # Yield the structured response immediately
-                                            yield {"llm_response": structured_response}
-                                            # Mark that we've yielded a structure response
-                                    except Exception as e:
-                                        self.logger.error(f"Failed to parse structure output progressively: {str(e)}")
-
-                            # Progressive execution: check if function is complete
+                                current_tool_call["function"]["name"] and 
+                                current_tool_call["function"]["name"].lower() == input.structure_type.__name__.lower()):
+                                # Handle structure output separately - yield immediately
+                                try:
+                                    if isinstance(current_tool_call["function"]["arguments"], str):
+                                        structured_response = parse_to_structure(current_tool_call["function"]["arguments"], input.structure_type)
+                                    else:
+                                        structured_response = parse_to_structure(json.dumps(current_tool_call["function"]["arguments"]), input.structure_type)
+                                    yield {"llm_response": structured_response, "usage": accumulated_usage}
+                                except Exception as e:
+                                    self.logger.error(f"Failed to parse structure output progressively: {str(e)}")
+                                continue
+                            
+                            # Progressive execution: check if function is complete (OpenAI functions arrive complete)
                             if self._is_function_complete(current_tool_call["function"]):
-                                # Additional check for structure functions - ensure JSON is complete
-                                
                                 function_name = current_tool_call["function"]["name"]
                                 
-                                # Skip structure functions - they should be handled separately, not as regular functions
-                                if (input.structure_type and 
-                                    function_name.lower() == input.structure_type.__name__.lower()):
-                                    self.logger.debug(f"Skipping structure function {function_name} from progressive execution")
-                                    continue
+                                # Parse arguments if string
+                                if isinstance(current_tool_call["function"]["arguments"], str):
+                                    try:
+                                        function_args = json.loads(current_tool_call["function"]["arguments"])
+                                    except json.JSONDecodeError:
+                                        function_args = {}
+                                else:
+                                    function_args = current_tool_call["function"]["arguments"]
                                 
-                                self.logger.debug(f"Executing function {function_name} with args: {current_tool_call['function']['arguments']}")
-
                                 # Regular function - execute progressively
                                 function_call = FunctionCall(
                                     name=function_name,
-                                    args=json.loads(current_tool_call["function"]["arguments"]) if current_tool_call["function"]["arguments"] else {},
-                                    call_id=current_tool_call["id"] or f"{function_name}_{tool_index}",
+                                    args=function_args,
+                                    call_id=current_tool_call["id"],
                                     is_background=function_name in (input.background_tasks or {})
                                 )
                                 
                                 # Execute progressively if not already executed
                                 if not streaming_state.is_already_executed(function_call):
-                                    self.logger.info(f"Executing function progressively: {function_call.name} in {time.time()}")
+                                    self.logger.info(f"Executing function progressively: {function_call.name} at {time.time()}")
                                     try:
                                         task = await self._execute_function_progressively(function_call, input)
                                         streaming_state.add_function_task(task, function_call)
                                     except Exception as e:
                                         self.logger.error(f"Progressive execution failed for {function_call.name}: {str(e)}")
-                yield {"llm_response": None, "usage": accumulated_usage}
+                                        
+                        # Handle text content from ResponseContentPartDoneEvent (for final responses)
+                        if "response.output_text.delta" in event.type and hasattr(event, "delta"):
+                            collected_text += event.delta
+                            if not input.structure_type:
+                                yield {"llm_response": collected_text}
+                            else:
+                                is_complete, fixed_json = is_json_complete(collected_text)
+                                if is_complete:
+                                    try:
+                                        final_response = parse_to_structure(fixed_json, input.structure_type)
+                                        yield {"llm_response": final_response, "usage": accumulated_usage}
+                                    except ValueError:
+                                        pass
+                        
+                    self.logger.debug(f"Turn {current_turn}: Stream ended. Processed {chunk_count} chunks. "
+                                   f"Tool calls: {len(tool_calls_in_progress)}, Text collected: {len(collected_text)} chars, "
+                                   f"Progressive tasks: {len(streaming_state.active_function_tasks)}")
 
-                self.logger.debug(f"Turn {current_turn}: Stream ended. Processed {chunk_count} chunks. "
-                               f"Tool calls: {len(tool_calls_in_progress)}, Text collected: {len(collected_text)} chars, "
-                               f"Structured response: {structured_response is not None}, "
-                               f"Progressive tasks: {len(streaming_state.active_function_tasks)}")
+                    # Progressive streaming: gather results from executed functions
+                    if streaming_state.active_function_tasks:
+                        self.logger.info(f"Gathering results from {len(streaming_state.active_function_tasks)} progressive function executions")
+                        
+                        # Gather progressive execution results
+                        execution_result = await self._gather_progressive_results(streaming_state.active_function_tasks)
+                        
+                        # Add failed functions to context for model awareness
+                        if execution_result.get('failed_functions'):
+                            context_messages = []
+                            for msg in response_input:
+                                if isinstance(msg, dict) and 'content' in msg:
+                                    context_messages.append(msg['content'])
+                            self._add_failed_functions_to_context(execution_result['failed_functions'], context_messages)
+                            # Update response_input with context
+                            if context_messages:
+                                response_input.append({
+                                    "type": "message",
+                                    "role": "user",
+                                    "content": context_messages[-1]
+                                })
+                        
+                        # Add function results to conversation
+                        self._add_function_results_to_response_input(execution_result, response_input)
+                        
+                        # Check if we have regular function calls that require conversation continuation
+                        regular_results = execution_result.get('regular_results', [])
+                        if regular_results:
+                            current_turn += 1
+                            continue
                 
-                # Progressive streaming: gather results from executed functions
-                if streaming_state.active_function_tasks:
-                    self.logger.info(f"Gathering results from {len(streaming_state.active_function_tasks)} progressive function executions")
-                    
-                    # Gather progressive execution results
-                    execution_result = await self._gather_progressive_results(streaming_state.active_function_tasks)
-                    
-                    # Add failed functions to context for model awareness
-                    if execution_result.get('failed_functions'):
-                        self._add_failed_functions_to_context(execution_result['failed_functions'], [])
-                        # Convert messages to content list for failed function context
-                        context_messages = []
-                        for msg in messages:
-                            if isinstance(msg, dict) and 'content' in msg:
-                                context_messages.append(msg['content'])
-                        self._add_failed_functions_to_context(execution_result['failed_functions'], context_messages)
-                        # Update messages with context
-                        if context_messages:
-                            messages.append({"role": "user", "content": context_messages[-1]})
-                    
-                    
-                    # Add function results to conversation
-                    self._add_function_results_to_messages(execution_result, messages)
-                    
-                    # Check if we have regular function calls that require conversation continuation
-                    regular_results = execution_result.get('regular_results', [])
-                    if regular_results:
-                        current_turn += 1
-                        continue
-                
-                    background_initiated = execution_result.get('background_initiated', [])
-                    if background_initiated and (not structured_response and not collected_text):
-                        current_turn += 1
-                        continue
-
                 # Stream completed for this turn
                 self.logger.debug(f"Turn {current_turn}: Stream completed")
                 break
@@ -863,5 +811,5 @@ class OpenAIClient(BaseLLMClient):
                 "usage": accumulated_usage,
             }
         else:
-            # Final usage yield - always yield usage at the end
+            # Final usage yield if no structured response was returned
             yield {"llm_response": None, "usage": accumulated_usage}
