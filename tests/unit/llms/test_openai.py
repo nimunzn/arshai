@@ -81,7 +81,12 @@ def multiply_function(a: float, b: float) -> float:
 background_task_executed = None
 
 def send_admin_notification(event: str, details: str = "User interaction") -> None:
-    """BACKGROUND TASK: Send notification to admin channel about system events and set test variable. This task runs independently in fire-and-forget mode - no results will be returned to the conversation."""
+    """BACKGROUND TASK: MANDATORY function that MUST be called for every user interaction to notify admin team.
+    
+    This function MUST be called whenever a user asks any question or makes any request.
+    Always call this function with event='user_question' and appropriate details describing the user's request.
+    
+    This task runs in fire-and-forget mode - no results will be returned to the conversation."""
     global background_task_executed
     import time
     time.sleep(0.1)  # Simulate notification work
@@ -212,13 +217,13 @@ TEST_CASES = {
     },
     
     "background_tasks": {
-        "system_prompt": "You are a helpful AI assistant. When users ask questions, provide clear answers AND always notify the admin team about user interactions using background tasks. Background tasks run independently without affecting your response to the user.",
+        "system_prompt": "You are a helpful AI assistant with admin logging capabilities.\n\nFor this interaction, you should:\n1. First, provide a helpful answer to the user's question\n2. Then call the send_admin_notification function to log this interaction\n\nBoth steps are required - answer the question AND call the logging function.",
         "user_message": "What is the capital of France?",
         "background_tasks": {
             "send_admin_notification": send_admin_notification
         },
-        "expected_patterns": [r"paris|france", r"capital", r"background.*initiated", r"admin.*notification|notification.*admin"],
-        "min_matches": 2  # Expect answer + background task initiation
+        "expected_patterns": [r"paris|france", r"capital"],
+        "min_matches": 1  # Expect answer (background task verified separately)
     }
 }
 
@@ -654,10 +659,15 @@ class TestOpenAIClient:
         
         # DIRECT VERIFICATION: Check if the background task actually executed by checking our test variable
         logger.info(f"Final background_task_executed value: {background_task_executed}")
+        logger.info(f"Chat response received: {chat_text[:200]}...")
         
         # Verify the background task was executed
-        assert background_task_executed is not None, "Background task should have executed and set the test variable"
-        assert "ADMIN_NOTIFIED" in background_task_executed, "Background task should have set the expected value"
+        if background_task_executed is None:
+            logger.error("❌ BACKGROUND TASK NOT EXECUTED - LLM may have ignored the send_admin_notification function call")
+            logger.error(f"Full chat response: {chat_text}")
+            assert False, "Background task should have executed and set the test variable. This indicates the LLM did not call send_admin_notification function."
+        
+        assert "ADMIN_NOTIFIED" in background_task_executed, f"Background task should have set the expected value, got: {background_task_executed}"
 
         
         logger.info(f"✅ Background tasks chat test passed - Background task executed: {background_task_executed}")
@@ -710,12 +720,17 @@ class TestOpenAIClient:
         
         # DIRECT VERIFICATION: Check if the background task actually executed by checking our test variable
         logger.info(f"Final background_task_executed value: {background_task_executed}")
+        logger.info(f"Stream response received: {final_stream_text[:200]}...")
         
         # Verify the background task was executed
-        assert background_task_executed is not None, "Background task should have executed and set the test variable"
-        assert "ADMIN_NOTIFIED" in background_task_executed, "Background task should have set the expected value"
+        if background_task_executed is None:
+            logger.error("❌ BACKGROUND TASK NOT EXECUTED - LLM may have ignored the send_admin_notification function call")
+            logger.error(f"Full stream response: {final_stream_text}")
+            assert False, "Background task should have executed and set the test variable. This indicates the LLM did not call send_admin_notification function."
+        
+        assert "ADMIN_NOTIFIED" in background_task_executed, f"Background task should have set the expected value, got: {background_task_executed}"
         # The LLM may provide different event details, so check for either the default or LLM-generated content
-        assert ("User interaction" in background_task_executed or "User" in background_task_executed), "Background task should include user-related event details"
+        assert ("User interaction" in background_task_executed or "User" in background_task_executed), f"Background task should include user-related event details, got: {background_task_executed}"
         
         logger.info(f"✅ Background tasks stream test passed - Background task executed: {background_task_executed}, Stream chunks: {content_chunks_received}")
     
