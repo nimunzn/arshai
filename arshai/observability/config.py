@@ -78,7 +78,8 @@ class ObservabilityConfig(IDTO):
     # OTLP Exporter configuration (optional)
     otlp_endpoint: Optional[str] = Field(default=None, description="OTLP endpoint URL")
     otlp_headers: Dict[str, str] = Field(default_factory=dict, description="OTLP headers")
-    otlp_timeout: int = Field(default=10, description="OTLP timeout in seconds")
+    otlp_timeout: int = Field(default=30000, description="OTLP timeout in seconds")
+    otlp_insecure: bool = Field(default=True, description="Use insecure connection for OTLP (no SSL/TLS)")
     # Non-intrusive mode
     non_intrusive: bool = Field(default=True, description="Enable non-intrusive observability mode")
     
@@ -157,6 +158,9 @@ class ObservabilityConfig(IDTO):
         
         # OTLP configuration
         config_dict["otlp_endpoint"] = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+        
+        if "OTEL_EXPORTER_OTLP_INSECURE" in os.environ:
+            config_dict["otlp_insecure"] = os.environ.get("OTEL_EXPORTER_OTLP_INSECURE", "false").lower() == "true"
         
         if "OTEL_EXPORTER_OTLP_HEADERS" in os.environ:
             headers_str = os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", "")
