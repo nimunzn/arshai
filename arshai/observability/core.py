@@ -59,34 +59,33 @@ class ObservabilityManager:
             
             # Set up OTLP exporter if endpoint is configured
             if self.config.otlp_endpoint:
-                # Auto-detect protocol based on endpoint
-                if '/v1/traces' in self.config.otlp_endpoint or self.config.otlp_endpoint.startswith('http'):
-                    # HTTP endpoint detected
-                    try:
-                        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter as HTTPSpanExporter
-                        otlp_exporter = HTTPSpanExporter(
+                # Determine if we should use insecure connection
+                # Check config first, then auto-detect based on endpoint
+                use_insecure = self.config.otlp_insecure
+                # Create exporter with appropriate security setting
+                try:
+                    if use_insecure:
+                        otlp_exporter = OTLPSpanExporter(
                             endpoint=self.config.otlp_endpoint,
                             headers=self.config.otlp_headers,
                             timeout=self.config.otlp_timeout,
+                            insecure=True
                         )
-                        self.logger.info("Using OTLP HTTP exporter")
-                    except ImportError:
-                        self.logger.warning("HTTP exporter not available, falling back to gRPC")
+                        self.logger.info("Using OTLP gRPC exporter with insecure connection")
+                    else:
                         otlp_exporter = OTLPSpanExporter(
                             endpoint=self.config.otlp_endpoint,
                             headers=self.config.otlp_headers,
                             timeout=self.config.otlp_timeout,
                         )
-                else:
-                    # gRPC endpoint (default)
-                    otlp_exporter = OTLPSpanExporter(
-                        endpoint=self.config.otlp_endpoint,
-                        headers=self.config.otlp_headers,
-                        timeout=self.config.otlp_timeout,
-                    )
-                    self.logger.info("Using OTLP gRPC exporter")
-                span_processor = BatchSpanProcessor(otlp_exporter)
-                tracer_provider.add_span_processor(span_processor)
+                        self.logger.info("Using OTLP gRPC exporter with secure connection")
+                    
+                    span_processor = BatchSpanProcessor(otlp_exporter)
+                    tracer_provider.add_span_processor(span_processor)
+                    
+                except Exception as e:
+                    self.logger.error(f"Failed to create OTLP exporter: {e}")
+                    # If secure connection failed and we haven't tried insecure yet
             
             # Check if a TracerProvider is already set to avoid the override error
             current_provider = trace.get_tracer_provider()
@@ -98,7 +97,6 @@ class ObservabilityManager:
                 tracer_provider = current_provider
             
             self.tracer = trace.get_tracer(__name__)
-            
             self.logger.info("Tracing initialized")
             
         except Exception as e:
