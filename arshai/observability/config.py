@@ -3,7 +3,8 @@
 from typing import Optional, Dict, Any, Union
 from pathlib import Path
 import os
-from pydantic import BaseModel, Field
+from enum import Enum
+from pydantic import BaseModel, Field, field_validator
 from arshai.core.interfaces.idto import IDTO
 
 # Optional YAML support
@@ -12,6 +13,23 @@ try:
     YAML_AVAILABLE = True
 except ImportError:
     YAML_AVAILABLE = False
+
+
+class SpanKind(str, Enum):
+    """Phoenix-compatible span kinds.
+    
+    Based on Phoenix documentation:
+    https://arize.com/docs/phoenix/tracing/how-to-tracing/setup-tracing/instrument-python
+    """
+    CHAIN = "CHAIN"  # General logic operations, functions, or code blocks
+    LLM = "LLM"  # Making LLM calls
+    TOOL = "TOOL"  # Completing tool calls
+    RETRIEVER = "RETRIEVER"  # Retrieving documents
+    EMBEDDING = "EMBEDDING"  # Generating embeddings
+    AGENT = "AGENT"  # Agent invocations - typically a top level or near top level span
+    RERANKER = "RERANKER"  # Reranking retrieved context
+    GUARDRAIL = "GUARDRAIL"  # Guardrail checks
+    EVALUATOR = "EVALUATOR"  # Evaluators - typically only use by Phoenix when automatically tracing evaluation and experiment calls
 
 
 class ObservabilityConfig(IDTO):
@@ -23,6 +41,7 @@ class ObservabilityConfig(IDTO):
     
     # OpenTelemetry configuration
     service_name: str = Field(default="arshai-llm", description="Service name for traces")
+    kind: Union[SpanKind, str] = Field(default=SpanKind.LLM, description="Phoenix-compatible span kind for traces")
     service_version: str = Field(default="1.0.0", description="Service version")
     environment: str = Field(default="production", description="Environment name")
     
@@ -60,14 +79,21 @@ class ObservabilityConfig(IDTO):
     otlp_endpoint: Optional[str] = Field(default=None, description="OTLP endpoint URL")
     otlp_headers: Dict[str, str] = Field(default_factory=dict, description="OTLP headers")
     otlp_timeout: int = Field(default=10, description="OTLP timeout in seconds")
-    
-    # Arize-specific configuration (optional)
-    arize_space_id: Optional[str] = Field(default=None, description="Arize space ID")
-    arize_api_key: Optional[str] = Field(default=None, description="Arize API key")
-    arize_project_name: Optional[str] = Field(default=None, description="Arize project name")
-    
     # Non-intrusive mode
     non_intrusive: bool = Field(default=True, description="Enable non-intrusive observability mode")
+    
+    @field_validator('kind')
+    @classmethod
+    def validate_kind(cls, v: Union[SpanKind, str]) -> Union[SpanKind, str]:
+        """Validate and convert kind to SpanKind enum if it's a string."""
+        if isinstance(v, str):
+            # Try to convert string to SpanKind enum
+            try:
+                return SpanKind(v.upper())
+            except ValueError:
+                valid_kinds = ", ".join([k.value for k in SpanKind])
+                raise ValueError(f"Invalid span kind: '{v}'. Must be one of: {valid_kinds}")
+        return v
     
     @classmethod
     def from_yaml(cls, config_path: Union[str, Path]) -> "ObservabilityConfig":
@@ -120,6 +146,10 @@ class ObservabilityConfig(IDTO):
         config_dict["service_name"] = os.environ.get("OTEL_SERVICE_NAME", os.environ.get("ARSHAI_SERVICE_NAME", "arshai-llm"))
         config_dict["service_version"] = os.environ.get("OTEL_SERVICE_VERSION", os.environ.get("ARSHAI_SERVICE_VERSION", "1.0.0"))
         config_dict["environment"] = os.environ.get("DEPLOYMENT_ENVIRONMENT", os.environ.get("ARSHAI_ENVIRONMENT", "production"))
+        
+        # Span kind configuration (Phoenix-compatible)
+        if "ARSHAI_SPAN_KIND" in os.environ:
+            config_dict["kind"] = os.environ.get("ARSHAI_SPAN_KIND", "LLM")
         
         # Tracing configuration
         if "OTEL_TRACE_SAMPLING_RATE" in os.environ:
