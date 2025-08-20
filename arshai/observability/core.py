@@ -137,6 +137,8 @@ class ObservabilityManager:
             "llm.provider": provider,
             "llm.model_name": model,  # Renamed to match OpenInference
             "llm.method": method_name,
+            # Phoenix-specific attributes
+            "openinference.span.kind": self.config.kind.value if hasattr(self.config.kind, 'value') else self.config.kind, #https://arize.com/docs/phoenix/tracing/how-to-tracing/setup-tracing/instrument-python
         }
         
         # Add system if provided
@@ -224,6 +226,7 @@ class ObservabilityManager:
             "llm.model_name": model,  # Renamed to match OpenInference
             "llm.method": method_name,
             "llm.streaming": True,
+            "openinference.span.kind": self.config.kind.value if hasattr(self.config.kind, 'value') else self.config.kind
         }
         
         # Add system if provided
