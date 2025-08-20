@@ -325,7 +325,9 @@ class BaseLLMClient(ILLM, ABC):
             async with self.observability_manager.observe_llm_call(
                 self._get_provider_name(),
                 self.config.model,
-                "chat"
+                "chat",
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens
             ) as timing_data:
                 # Capture input content for Phoenix display (respecting privacy controls)
                 if self.observability_manager.config.log_prompts:
@@ -413,7 +415,9 @@ class BaseLLMClient(ILLM, ABC):
             async with self.observability_manager.observe_streaming_llm_call(
                 self._get_provider_name(),
                 self.config.model,
-                "stream"
+                "stream",
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens
             ) as timing_data:
                 # Capture input content for Phoenix display (respecting privacy controls)
                 if self.observability_manager.config.log_prompts:

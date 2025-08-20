@@ -161,7 +161,7 @@ class MetricsCollector:
             # Check if a MeterProvider is already set to avoid the override error
             current_provider = metrics.get_meter_provider()
             # Check if current provider is the default NoOpMeterProvider or already configured 
-            if type(current_provider).name == 'NoOpMeterProvider':
+            if type(current_provider).__name__ == 'NoOpMeterProvider':
                 # No real MeterProvider is set, safe to set ours
                 metrics.set_meter_provider(meter_provider)
                 self.logger.info("MeterProvider successfully initialized")

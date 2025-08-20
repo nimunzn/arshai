@@ -49,11 +49,18 @@ class ObservabilityManager:
     def _initialize_tracing(self):
         """Initialize OpenTelemetry tracing."""
         try:
-            resource = Resource.create({
+            # Essential resource attributes for Elastic APM
+            resource_attributes = {
                 "service.name": self.config.service_name,
                 "service.version": self.config.service_version,
-                "environment": self.config.environment,
-            })
+                "deployment.environment": self.config.environment,  # Required for Elastic APM
+            }
+            
+            # Add service.instance.id for multi-instance support
+            import os
+            resource_attributes["service.instance.id"] = f"{self.config.service_name}-{os.getpid()}"
+            
+            resource = Resource.create(resource_attributes)
             
             tracer_provider = TracerProvider(resource=resource)
             
@@ -130,13 +137,17 @@ class ObservabilityManager:
             yield TimingData()
             return
         
-        # Create span attributes
+        # Create span attributes (essential only)
         span_attributes = {
             "llm.provider": provider,
-            "llm.model_name": model,  # Renamed to match OpenInference
+            "llm.model_name": model,
             "llm.method": method_name,
-            # Phoenix-specific attributes
-            "openinference.span.kind": self.config.kind.value if hasattr(self.config.kind, 'value') else self.config.kind, #https://arize.com/docs/phoenix/tracing/how-to-tracing/setup-tracing/instrument-python
+            "llm.request.model": model,
+            "llm.system": provider,
+            # Elastic APM transaction type
+            "span.type": "llm",
+            # Phoenix compatibility (if needed)
+            "openinference.span.kind": self.config.kind.value if hasattr(self.config.kind, 'value') else self.config.kind,
         }
         
         # Add system if provided
@@ -150,9 +161,12 @@ class ObservabilityManager:
         # Start tracing if enabled
         span_context = None
         if self.tracer:
+            # Use a more descriptive span name for Elastic APM
+            span_name = f"{provider}.{method_name}"
             span_context = self.tracer.start_as_current_span(
-                f"llm.{method_name}",
-                attributes=span_attributes
+                span_name,
+                attributes=span_attributes,
+                kind=SpanKind.CLIENT  # Elastic APM works better with explicit span kinds
             )
         
         # Start metrics collection if enabled
@@ -238,9 +252,12 @@ class ObservabilityManager:
         # Start tracing if enabled
         span_context = None
         if self.tracer:
+            # Use a more descriptive span name for Elastic APM
+            span_name = f"{provider}.{method_name}"
             span_context = self.tracer.start_as_current_span(
-                f"llm.{method_name}",
-                attributes=span_attributes
+                span_name,
+                attributes=span_attributes,
+                kind=SpanKind.CLIENT  # Elastic APM works better with explicit span kinds
             )
         
         # Start metrics collection if enabled
