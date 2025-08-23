@@ -88,7 +88,7 @@ class TelemetryManager:
         
         # Package information for proper OTEL registration
         self._package_name = "arshai"
-        self._package_version = "1.2.3"  # Should come from arshai.__version__
+        self._package_version = "1.3.0"  # Should come from arshai.__version__
         
         # Telemetry components
         self._tracer: Optional[Union[Tracer, NoOpTracer]] = None
