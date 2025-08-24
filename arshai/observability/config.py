@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 """Configuration for Arshai observability system."""
 
 from typing import Optional, Dict, Any, Union
@@ -277,3 +278,32 @@ class ObservabilityConfig(IDTO):
     class Config:
         """Pydantic configuration."""
         extra = "allow"  # Allow additional configuration options
+=======
+"""LLM-friendly configuration for Arshai observability.
+
+This module provides the main configuration class that replaces the old
+ObservabilityConfig with OTEL anti-patterns.
+
+The new PackageObservabilityConfig:
+✅ Never creates or configures OTEL providers
+✅ Uses package-specific environment variables  
+✅ Respects parent application's OTEL setup
+✅ Works with and without OTEL dependencies
+✅ Provides granular feature control
+"""
+
+# Re-export the new configuration system
+from .package_config import (
+    PackageObservabilityConfig,
+    ObservabilityLevel
+)
+
+# For backward compatibility, alias the new class
+ObservabilityConfig = PackageObservabilityConfig
+
+__all__ = [
+    "PackageObservabilityConfig", 
+    "ObservabilityLevel",
+    "ObservabilityConfig",  # Backward compatibility alias
+]
+>>>>>>> e00d9333252e58887413664a96bf4e43dda19c0b
