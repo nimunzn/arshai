@@ -1,10 +1,6 @@
 [tool.poetry]
 name = "arshai"
-<<<<<<< HEAD
-version = "1.2.0"
-=======
 version = "1.3.0"
->>>>>>> e00d9333252e58887413664a96bf4e43dda19c0b
 description = "A powerful agent framework for building conversational AI systems"
 authors = ["Nima Nazarian <nimunzn@gmail.com>"]
 readme = "README.md"
