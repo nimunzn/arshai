@@ -179,29 +179,59 @@ class OpenRouterClient(BaseLLMClient):
     # PROVIDER-SPECIFIC HELPER METHODS
     # ========================================================================
 
-    def _accumulate_usage_safely(self, current_usage: Dict[str, Any], accumulated_usage: Dict[str, Any] = None) -> Dict[str, Any]:
+    def _extract_and_standardize_usage(self, response: Any) -> Dict[str, Any]:
         """
-        Safely accumulate usage metadata without in-place mutations.
+        Extract and standardize usage metadata from OpenRouter response.
+        
+        Updated for accurate extraction based on 2025 OpenRouter API format:
+        - prompt_tokens -> input_tokens
+        - completion_tokens -> output_tokens
+        - reasoning tokens included in completion_tokens (charged as output)
+        - Uses normalized token counts via GPT-4o tokenizer
         
         Args:
-            current_usage: Current usage metadata
-            accumulated_usage: Previously accumulated usage (optional)
-        
+            response: OpenRouter response object
+            
         Returns:
-            New accumulated usage dictionary
+            Standardized usage metadata dictionary
         """
-        if accumulated_usage is None:
-            return current_usage
+        if not hasattr(response, 'usage') or not response.usage:
+            return {
+                "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+                "thinking_tokens": 0, "tool_calling_tokens": 0,
+                "provider": self._provider_name, "model": self.config.model,
+                "request_id": getattr(response, 'id', None)
+            }
+        
+        usage = response.usage
+        
+        # Extract base token counts
+        input_tokens = getattr(usage, 'prompt_tokens', 0)
+        output_tokens = getattr(usage, 'completion_tokens', 0)
+        total_tokens = getattr(usage, 'total_tokens', 0)
+        
+        # OpenRouter includes reasoning tokens in completion_tokens count
+        # But reasoning content appears in the 'reasoning' field of messages
+        thinking_tokens = 0
+        if hasattr(response, 'choices') and response.choices:
+            choice = response.choices[0]
+            if hasattr(choice, 'message') and hasattr(choice.message, 'reasoning') and choice.message.reasoning:
+                # Estimate reasoning tokens from reasoning content if available
+                # OpenRouter charges reasoning tokens as part of completion_tokens
+                thinking_tokens = getattr(usage, 'reasoning_tokens', 0) or 0
+        
+        # OpenRouter doesn't separate function calling tokens from completion_tokens  
+        tool_calling_tokens = 0
         
         return {
-            "input_tokens": accumulated_usage["input_tokens"] + current_usage["input_tokens"],
-            "output_tokens": accumulated_usage["output_tokens"] + current_usage["output_tokens"],
-            "total_tokens": accumulated_usage["total_tokens"] + current_usage["total_tokens"],
-            "thinking_tokens": accumulated_usage["thinking_tokens"] + current_usage["thinking_tokens"],
-            "tool_calling_tokens": accumulated_usage["tool_calling_tokens"] + current_usage["tool_calling_tokens"],
-            "provider": current_usage["provider"],
-            "model": current_usage["model"],
-            "request_id": current_usage["request_id"]
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+            "thinking_tokens": thinking_tokens,
+            "tool_calling_tokens": tool_calling_tokens,
+            "provider": self._provider_name,
+            "model": self.config.model,
+            "request_id": getattr(response, 'id', None)
         }
 
     def _create_openai_messages(self, input: ILLMInput) -> List[Dict[str, Any]]:
@@ -456,12 +486,7 @@ class OpenRouterClient(BaseLLMClient):
         response = self._client.chat.completions.create(**kwargs)
         
         # Process usage metadata
-        usage = self._standardize_usage_metadata(
-            response.usage if hasattr(response, 'usage') else None,
-            self._get_provider_name(),
-            self.config.model,
-            getattr(response, 'id', None)
-        )
+        usage = self._extract_and_standardize_usage(response)
         
         # Handle structured output
         if input.structure_type:
@@ -528,9 +553,7 @@ class OpenRouterClient(BaseLLMClient):
                 
                 # Process usage metadata using framework standardization
                 if hasattr(response, "usage") and response.usage:
-                    current_usage = self._standardize_usage_metadata(
-                        response.usage, self._get_provider_name(), self.config.model, getattr(response, 'id', None)
-                    )
+                    current_usage = self._extract_and_standardize_usage(response)
                     # Use safe accumulation helper
                     accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
                 
@@ -648,9 +671,7 @@ class OpenRouterClient(BaseLLMClient):
         for chunk in self._client.chat.completions.create(**kwargs):
             # Handle usage data if available
             if hasattr(chunk, 'usage') and chunk.usage is not None:
-                current_usage = self._standardize_usage_metadata(
-                    chunk.usage, self._get_provider_name(), self.config.model
-                )
+                current_usage = self._extract_and_standardize_usage(chunk)
                 accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
             
             # Skip chunks without choices
@@ -759,9 +780,7 @@ class OpenRouterClient(BaseLLMClient):
                     chunk_count += 1
                     # Handle usage metadata
                     if hasattr(chunk, 'usage') and chunk.usage is not None:
-                        current_usage = self._standardize_usage_metadata(
-                            chunk.usage, self._get_provider_name(), self.config.model
-                        )
+                        current_usage = self._extract_and_standardize_usage(chunk)
                         accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
                     
                     # Skip chunks without choices

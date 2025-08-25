@@ -47,13 +47,13 @@ class GeminiClient(BaseLLMClient):
     and demonstrates best practices for the new BaseLLMClient framework.
     """
     
-    def __init__(self, config: ILLMConfig, observability_manager=None):
+    def __init__(self, config: ILLMConfig, observability_config=None):
         """
         Initialize the Gemini client with configuration.
 
         Args:
             config: Configuration for the LLM
-            observability_manager: Optional observability manager for metrics collection
+            observability_config: Optional observability configuration for metrics collection
 
         Supports dual authentication methods:
         1. API Key (simpler): Set GOOGLE_API_KEY environment variable
@@ -68,7 +68,7 @@ class GeminiClient(BaseLLMClient):
         self.model_config = getattr(config, "config", {})
 
         # Initialize base client (handles common setup including observability)
-        super().__init__(config, observability_manager=observability_manager)
+        super().__init__(config, observability_config=observability_config)
         
         # Get model-specific configuration from config dict
         self.model_config = getattr(config, 'config', {})
@@ -252,29 +252,52 @@ class GeminiClient(BaseLLMClient):
     # PROVIDER-SPECIFIC HELPER METHODS
     # ========================================================================
 
-    def _accumulate_usage_safely(self, current_usage: Dict[str, Any], accumulated_usage: Dict[str, Any] = None) -> Dict[str, Any]:
+    def _extract_and_standardize_usage(self, response: Any) -> Dict[str, Any]:
         """
-        Safely accumulate usage metadata without in-place mutations.
+        Extract and standardize usage metadata from Gemini response.
+        
+        Updated for accurate extraction based on 2025 Gemini API format:
+        - prompt_token_count -> input_tokens
+        - candidates_token_count -> output_tokens (excludes thinking tokens)
+        - thoughts_token_count -> thinking_tokens (Gemini 2.5+ models)
+        - total_token_count -> total_tokens
         
         Args:
-            current_usage: Current usage metadata
-            accumulated_usage: Previously accumulated usage (optional)
-        
+            response: Gemini response object
+            
         Returns:
-            New accumulated usage dictionary
+            Standardized usage metadata dictionary
         """
-        if accumulated_usage is None:
-            return current_usage
+        if not hasattr(response, 'usage_metadata') or not response.usage_metadata:
+            return {
+                "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+                "thinking_tokens": 0, "tool_calling_tokens": 0,
+                "provider": self._provider_name, "model": self.config.model,
+                "request_id": getattr(response, 'id', None)
+            }
+        
+        usage = response.usage_metadata
+        
+        # Extract base token counts
+        input_tokens = getattr(usage, 'prompt_token_count', 0)
+        output_tokens = getattr(usage, 'candidates_token_count', 0)
+        total_tokens = getattr(usage, 'total_token_count', 0)
+        
+        # Extract thinking tokens (Gemini 2.5+ models with reasoning)
+        thinking_tokens = getattr(usage, 'thoughts_token_count', 0) or 0
+        
+        # Gemini doesn't separate tool calling tokens from candidates_token_count
+        tool_calling_tokens = 0
         
         return {
-            "input_tokens": accumulated_usage["input_tokens"] + current_usage["input_tokens"],
-            "output_tokens": accumulated_usage["output_tokens"] + current_usage["output_tokens"],
-            "total_tokens": accumulated_usage["total_tokens"] + current_usage["total_tokens"],
-            "thinking_tokens": accumulated_usage["thinking_tokens"] + current_usage["thinking_tokens"],
-            "tool_calling_tokens": accumulated_usage["tool_calling_tokens"] + current_usage["tool_calling_tokens"],
-            "provider": current_usage["provider"],
-            "model": current_usage["model"],
-            "request_id": current_usage["request_id"]
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+            "thinking_tokens": thinking_tokens,
+            "tool_calling_tokens": tool_calling_tokens,
+            "provider": self._provider_name,
+            "model": self.config.model,
+            "request_id": getattr(response, 'id', None)
         }
 
     def _test_client_connection(self, client) -> None:
@@ -486,12 +509,7 @@ class GeminiClient(BaseLLMClient):
         self.logger.debug(f"Response: {response}")
 
         # Process usage metadata
-        usage = self._standardize_usage_metadata(
-            response.usage_metadata if hasattr(response, 'usage_metadata') else None,
-            self._get_provider_name(),
-            self.config.model,
-            getattr(response, 'id', None)
-        )
+        usage = self._extract_and_standardize_usage(response)
 
         # Extract text from response using robust method
         response_text = self._extract_text_from_response(response)
@@ -554,9 +572,7 @@ class GeminiClient(BaseLLMClient):
                 
                 # Process usage metadata using framework standardization
                 if hasattr(response, "usage_metadata") and response.usage_metadata:
-                    current_usage = self._standardize_usage_metadata(
-                        response.usage_metadata, self._get_provider_name(), self.config.model, getattr(response, 'id', None)
-                    )
+                    current_usage = self._extract_and_standardize_usage(response)
                     accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
                 
                 # Check for function calls
@@ -647,9 +663,7 @@ class GeminiClient(BaseLLMClient):
         for chunk in stream:
             # Process usage metadata safely
             if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
-                current_usage = self._standardize_usage_metadata(
-                    chunk.usage_metadata, self._get_provider_name(), self.config.model
-                )
+                current_usage = self._extract_and_standardize_usage(chunk)
                 accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
 
             # Extract text from chunk
@@ -727,9 +741,7 @@ class GeminiClient(BaseLLMClient):
                     
                     # Handle usage metadata
                     if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
-                        current_usage = self._standardize_usage_metadata(
-                            chunk.usage_metadata, self._get_provider_name(), self.config.model
-                        )
+                        current_usage = self._extract_and_standardize_usage(chunk)
                         accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
                     
                     # Extract text from chunk
