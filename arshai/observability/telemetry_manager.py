@@ -87,8 +87,9 @@ class TelemetryManager:
 
         
         # Package information for proper OTEL registration
-        self._package_name = "arshai"
-        self._package_version = "1.3.0"  # Should come from arshai.__version__
+        # Use config values if provided, otherwise fall back to defaults
+        self._package_name = self.config.package_name
+        self._package_version = self.config.package_version
         
         # Telemetry components
         self._tracer: Optional[Union[Tracer, NoOpTracer]] = None
@@ -189,11 +190,16 @@ class TelemetryManager:
             from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
             
             # Create resource with service information
-            resource = Resource.create({
+            resource_attrs = {
                 "service.name": f"{self._package_name}",
                 "service.version": self._package_version,
-                "service.namespace": "arshai",
-            })
+            }
+            
+            # Add namespace only if configured
+            if self.config.service_namespace:
+                resource_attrs["service.namespace"] = self.config.service_namespace
+            
+            resource = Resource.create(resource_attrs)
             
             # Get OTLP endpoint from config or environment
             custom_endpoint = (
