@@ -128,6 +128,11 @@ class PackageObservabilityConfig(IDTO):
         description="Maximum response length to log (when enabled)"
     )
     
+    service_namespace: Optional[str] = Field(
+        default=None,
+        description="Service namespace for telemetry identification"
+    )
+    
     # Package identification (for proper OTEL resource attributes)
     package_name: str = Field(
         default="arshai",
