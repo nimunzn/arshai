@@ -9,7 +9,7 @@ import os
 import json
 import time
 import inspect
-from typing import Dict, Any, TypeVar, Type, Union, AsyncGenerator, List, Callable, Optional
+from typing import Dict, Any, TypeVar, Type, Union, AsyncGenerator, List, Callable
 from openai import OpenAI
 from openai.types.responses import ParsedResponse
 
@@ -124,29 +124,56 @@ class OpenAIClient(BaseLLMClient):
     # PROVIDER-SPECIFIC HELPER METHODS
     # ========================================================================
 
-    def _accumulate_usage_safely(self, current_usage: Dict[str, Any], accumulated_usage: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _extract_and_standardize_usage(self, response: Any) -> Dict[str, Any]:
         """
-        Safely accumulate usage metadata without in-place mutations.
+        Extract and standardize usage metadata from OpenAI response.
+        
+        Updated for accurate extraction based on 2025 OpenAI Responses API format:
+        - input_tokens/output_tokens (Responses API format)
+        - reasoning_tokens from output_tokens_details -> thinking_tokens
+        - function_call_tokens -> tool_calling_tokens (if available)
         
         Args:
-            current_usage: Current usage metadata
-            accumulated_usage: Previously accumulated usage (optional)
-        
+            response: OpenAI response object
+            
         Returns:
-            New accumulated usage dictionary
+            Standardized usage metadata dictionary
         """
-        if accumulated_usage is None:
-            return current_usage
+        if not hasattr(response, 'usage') or not response.usage:
+            return {
+                "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+                "thinking_tokens": 0, "tool_calling_tokens": 0,
+                "provider": self._provider_name, "model": self.config.model,
+                "request_id": getattr(response, 'id', None)
+            }
+        
+        usage = response.usage
+        
+        # Extract base token counts (Responses API format)
+        input_tokens = getattr(usage, 'input_tokens', 0)
+        output_tokens = getattr(usage, 'output_tokens', 0)
+        total_tokens = getattr(usage, 'total_tokens', 0)
+        
+        # Extract reasoning tokens from output_tokens_details (Responses API format)
+        thinking_tokens = 0
+        output_details = getattr(usage, 'output_tokens_details', None)
+        if output_details:
+            thinking_tokens = getattr(output_details, 'reasoning_tokens', 0) or 0
+        
+        # Extract function calling tokens (if available in usage object)
+        tool_calling_tokens = 0
+        if hasattr(usage, 'function_call_tokens'):
+            tool_calling_tokens = getattr(usage, 'function_call_tokens', 0) or 0
         
         return {
-            "input_tokens": accumulated_usage["input_tokens"] + current_usage["input_tokens"],
-            "output_tokens": accumulated_usage["output_tokens"] + current_usage["output_tokens"],
-            "total_tokens": accumulated_usage["total_tokens"] + current_usage["total_tokens"],
-            "thinking_tokens": accumulated_usage["thinking_tokens"] + current_usage["thinking_tokens"],
-            "tool_calling_tokens": accumulated_usage["tool_calling_tokens"] + current_usage["tool_calling_tokens"],
-            "provider": current_usage["provider"],
-            "model": current_usage["model"],
-            "request_id": current_usage["request_id"]
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+            "thinking_tokens": thinking_tokens,
+            "tool_calling_tokens": tool_calling_tokens,
+            "provider": self._provider_name,
+            "model": self.config.model,
+            "request_id": getattr(response, 'id', None)
         }
 
     def _create_openai_messages(self, input: ILLMInput) -> List[Dict[str, Any]]:
@@ -367,12 +394,7 @@ class OpenAIClient(BaseLLMClient):
         response: ParsedResponse = self._client.responses.parse(**kwargs)
         
         # Process usage metadata
-        usage = self._standardize_usage_metadata(
-            response.usage if hasattr(response, 'usage') else None,
-            self._get_provider_name(),
-            self.config.model,
-            getattr(response, 'id', '') or ''
-        )
+        usage = self._extract_and_standardize_usage(response)
         
         # Handle response based on whether it's structured or not
         if input.structure_type:
@@ -446,9 +468,8 @@ class OpenAIClient(BaseLLMClient):
                 
                 # Process usage metadata using framework standardization
                 if hasattr(response, "usage") and response.usage:
-                    current_usage = self._standardize_usage_metadata(
-                        response.usage, self._get_provider_name(), self.config.model, getattr(response, 'id', '') or ''
-                    )
+
+                    current_usage = self._extract_and_standardize_usage(response)
                     accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
                 
                 # Check for function calls in output
@@ -587,9 +608,7 @@ class OpenAIClient(BaseLLMClient):
             for event in stream:
                 if hasattr(event, "response") and hasattr(event.response, "usage") and event.response.usage:
                     # Usage from ResponseIncompleteEvent or ResponseCompletedEvent
-                    current_usage = self._standardize_usage_metadata(
-                        event.response.usage, self._get_provider_name(), self.config.model
-                    )
+                    current_usage = self._extract_and_standardize_usage(event.response)
                     accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
                 
                 # Handle text delta events - progressive streaming
@@ -675,9 +694,7 @@ class OpenAIClient(BaseLLMClient):
                         chunk_count += 1                        
                         # Handle usage metadata from response completion events
                         if hasattr(event, "response") and hasattr(event.response, "usage") and event.response.usage:
-                            current_usage = self._standardize_usage_metadata(
-                                event.response.usage, self._get_provider_name(), self.config.model
-                            )
+                            current_usage = self._extract_and_standardize_usage(event.response)
                             accumulated_usage = self._accumulate_usage_safely(current_usage, accumulated_usage)
                         
                         # Handle function call arguments completion with progressive execution

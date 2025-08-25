@@ -31,7 +31,6 @@ from arshai.llms.utils.function_execution import FunctionOrchestrator, FunctionE
 
 # Import new observability system
 from arshai.observability import get_llm_observability, PackageObservabilityConfig, TimingData
-from arshai.llms.utils.usage_tracking import standardize_usage_metadata, accumulate_usage_safely
 
 T = TypeVar("T")
 
@@ -296,152 +295,269 @@ class BaseLLMClient(ILLM, ABC):
 
     async def chat(self, input: ILLMInput) -> Dict[str, Any]:
         """
-        Framework-standardized chat method with LLM-friendly observability.
+        Framework-standardized chat method with optional LLM-friendly observability.
         
         This method handles:
         1. Routing between simple and complex cases
-        2. LLM-friendly observability integration
+        2. Optional LLM-friendly observability integration
         3. Error handling and logging
         4. Usage data recording
         """
-        # Determine execution path
+        # Get common values used by both observability and core logic
+        model_name = getattr(self.config, 'model', 'unknown')
         has_tools = input.regular_functions and len(input.regular_functions) > 0
         has_background_tasks = input.background_tasks and len(input.background_tasks) > 0
-        needs_function_calling = has_tools or has_background_tasks
 
-        # Get model name for observability
-        model_name = getattr(self.config, 'model', 'unknown')
+        if self.observability.is_enabled():
+            # WITH observability - wrap the core logic
+            try:
+                # Use LLM-friendly observability
+                async with self.observability.observe_llm_call(
+                    provider=self._provider_name,
+                    model=model_name,
+                    method_name="chat",
+                    has_tools=has_tools,
+                    has_background_tasks=has_background_tasks,
+                    structure_requested=input.structure_type is not None
+                ) as timing_data:
+                    
+                    # Add input content if logging is enabled and safe
+                    if (self.observability.config.should_log_content("prompts") and 
+                        hasattr(timing_data, 'input_value')):
+                        prompt_content = f"System: {str(input.system_prompt)}\nUser: {str(input.user_message)}"
+                        max_length = self.observability.config.get_content_length_limit("prompts")
+                        if len(prompt_content) > max_length:
+                            prompt_content = prompt_content[:max_length] + "..."
+                        timing_data.input_value = str(prompt_content)
+                    
+                    # Add invocation parameters from LLM config
+                    timing_data.invocation_parameters = {
+                        "model": model_name,
+                        "temperature": getattr(self.config, 'temperature', 0.0),
+                        "max_tokens": getattr(self.config, 'max_tokens', 0),
+                    }
+                    
+                    # Execute core chat logic
+                    result = await self._execute_chat(input)
+                    
+                    # Add response content if logging is enabled and safe
+                    if (self.observability.config.should_log_content("responses") and 
+                        hasattr(timing_data, 'output_value') and
+                        'llm_response' in result):
+                        response_content = str(result['llm_response'])
+                        max_length = self.observability.config.get_content_length_limit("responses")
+                        if len(response_content) > max_length:
+                            response_content = response_content[:max_length] + "..."
+                        timing_data.output_value = str(response_content)
+                    
+                    # Record usage data if available
+                    if 'usage' in result:
+                        await self.observability.record_usage_data(timing_data, result['usage'])
+                    
+                    return result
 
-        try:
-            # Use LLM-friendly observability
-            async with self.observability.observe_llm_call(
-                provider=self._provider_name,
-                model=model_name,
-                method_name="chat",
-                has_tools=has_tools,
-                has_background_tasks=has_background_tasks,
-                structure_requested=input.structure_type is not None
-            ) as timing_data:
-                
-                # Add input content if logging is enabled and safe
-                if (self.observability.config.should_log_content("prompts") and 
-                    hasattr(timing_data, 'input_value')):
-                    prompt_content = f"System: {str(input.system_prompt)}\nUser: {str(input.user_message)}"
-                    max_length = self.observability.config.get_content_length_limit("prompts")
-                    if len(prompt_content) > max_length:
-                        prompt_content = prompt_content[:max_length] + "..."
-                    timing_data.input_value = str(prompt_content)
-                
-                # Add invocation parameters from LLM config
-                timing_data.invocation_parameters = {
-                    "model": getattr(self.config, 'model', ''),
-                    "temperature": getattr(self.config, 'temperature', 0.0),
-                    "max_tokens": getattr(self.config, 'max_tokens', 0),
+            except Exception as e:
+                self.logger.error(f"Error in {self._provider_name} chat: {e}")
+                self.logger.debug(traceback.format_exc())
+                return {
+                    "llm_response": f"An error occurred: {str(e)}", 
+                    "usage": {
+                        "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+                        "thinking_tokens": 0, "tool_calling_tokens": 0,
+                        "provider": self._provider_name, "model": getattr(self.config, 'model', 'unknown'),
+                        "request_id": None
+                    }
                 }
-                
-                # Execute appropriate method based on complexity
-                if not needs_function_calling:
-                    result = await self._chat_simple(input)
-                else:
-                    result = await self._chat_with_functions(input)
-                
-                # Add response content if logging is enabled and safe
-                if (self.observability.config.should_log_content("responses") and 
-                    hasattr(timing_data, 'output_value') and
-                    'llm_response' in result):
-                    response_content = str(result['llm_response'])
-                    max_length = self.observability.config.get_content_length_limit("responses")
-                    if len(response_content) > max_length:
-                        response_content = response_content[:max_length] + "..."
-                    timing_data.output_value = str(response_content)
-                
-                # Record usage data if available
-                if 'usage' in result:
-                    await self.observability.record_usage_data(timing_data, result['usage'])
-                
-                return result
+        else:
+            # WITHOUT observability - direct execution
+            try:
+                return await self._execute_chat(input)
+            except Exception as e:
+                self.logger.error(f"Error in {self._provider_name} chat: {e}")
+                self.logger.debug(traceback.format_exc())
+                return {
+                    "llm_response": f"An error occurred: {str(e)}", 
+                    "usage": {
+                        "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+                        "thinking_tokens": 0, "tool_calling_tokens": 0,
+                        "provider": self._provider_name, "model": getattr(self.config, 'model', 'unknown'),
+                        "request_id": None
+                    }
+                }
+
+    async def _execute_chat(self, input: ILLMInput) -> Dict[str, Any]:
+        """
+        Execute core chat logic without observability concerns.
+        
+        This method contains the actual LLM execution logic and works
+        regardless of observability state.
+        
+        Args:
+            input: The LLM input containing system prompt, user message, tools, and options
+
+        Returns:
+            Dict containing 'llm_response' and 'usage' keys
+        """
+        try:
+            self.logger.info(f"Processing chat request - Regular Functions: {bool(input.regular_functions)}, "
+                           f"Background: {bool(input.background_tasks)}, "
+                           f"Structured: {bool(input.structure_type)}")
+
+            # Use the helper method to determine execution path
+            needs_function_calling = self._needs_function_calling(input)
+
+            # Execute appropriate method based on complexity
+            if not needs_function_calling:
+                return await self._chat_simple(input)
+            else:
+                return await self._chat_with_functions(input)
 
         except Exception as e:
             self.logger.error(f"Error in {self._provider_name} chat: {e}")
             self.logger.debug(traceback.format_exc())
-            raise
+            return {
+                "llm_response": f"An error occurred: {str(e)}", 
+                "usage": {
+                    "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+                    "thinking_tokens": 0, "tool_calling_tokens": 0,
+                    "provider": self._provider_name, "model": getattr(self.config, 'model', 'unknown'),
+                    "request_id": None
+                }
+            }
 
     async def stream(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        Framework-standardized streaming method with LLM-friendly observability.
+        Framework-standardized streaming method with optional LLM-friendly observability.
         """
-        # Determine execution path
+        # Get common values used by both observability and core logic
+        model_name = getattr(self.config, 'model', 'unknown')
         has_tools = input.regular_functions and len(input.regular_functions) > 0
         has_background_tasks = input.background_tasks and len(input.background_tasks) > 0
-        needs_function_calling = has_tools or has_background_tasks
 
-        # Get model name for observability  
-        model_name = getattr(self.config, 'model', 'unknown')
+        if self.observability.is_enabled():
+            # WITH observability - wrap the core streaming logic
+            try:
+                # Use LLM-friendly observability for streaming
+                async with self.observability.observe_streaming_llm_call(
+                    provider=self._provider_name,
+                    model=model_name,
+                    method_name="stream",
+                    has_tools=has_tools,
+                    has_background_tasks=has_background_tasks,
+                    structure_requested=input.structure_type is not None
+                ) as timing_data:
+                    
+                    # Add input content if logging is enabled and safe
+                    if (self.observability.config.should_log_content("prompts") and
+                        hasattr(timing_data, 'input_value')):
+                        prompt_content = f"System: {str(input.system_prompt)}\nUser: {str(input.user_message)}"
+                        max_length = self.observability.config.get_content_length_limit("prompts")
+                        if len(prompt_content) > max_length:
+                            prompt_content = prompt_content[:max_length] + "..."
+                        timing_data.input_value = str(prompt_content)
+                    
+                    # Add invocation parameters from LLM config
+                    timing_data.invocation_parameters = {
+                        "model": model_name,
+                        "temperature": getattr(self.config, 'temperature', 0.0),
+                        "max_tokens": getattr(self.config, 'max_tokens', 0),
+                    }
+                    
+                    accumulated_response = []
+                    
+                    # Execute core streaming logic
+                    async for chunk in self._execute_stream(input):
+                        # Record token timing for first chunk
+                        if 'llm_response' in chunk and chunk['llm_response']:
+                            if not accumulated_response:  # First token
+                                timing_data.record_first_token()
+                            timing_data.record_token()  # Update last token time
+                            accumulated_response.append(chunk['llm_response'])
+                        
+                        # Record usage data if available
+                        if 'usage' in chunk:
+                            await self.observability.record_usage_data(timing_data, chunk['usage'])
+                        
+                        yield chunk
+                    
+                    # Add final response content if logging is enabled and safe
+                    if (accumulated_response and 
+                        self.observability.config.should_log_content("responses") and
+                        hasattr(timing_data, 'output_value')):
+                        response_content = str(''.join(str(item) for item in accumulated_response))
+                        max_length = self.observability.config.get_content_length_limit("responses") 
+                        if len(response_content) > max_length:
+                            response_content = response_content[:max_length] + "..."
+                        timing_data.output_value = str(response_content)
 
-        try:
-            # Use LLM-friendly observability for streaming
-            async with self.observability.observe_streaming_llm_call(
-                provider=self._provider_name,
-                model=model_name,
-                method_name="stream",
-                has_tools=has_tools,
-                has_background_tasks=has_background_tasks,
-                structure_requested=input.structure_type is not None
-            ) as timing_data:
-                
-                # Add input content if logging is enabled and safe
-                if (self.observability.config.should_log_content("prompts") and
-                    hasattr(timing_data, 'input_value')):
-                    prompt_content = f"System: {str(input.system_prompt)}\nUser: {str(input.user_message)}"
-                    max_length = self.observability.config.get_content_length_limit("prompts")
-                    if len(prompt_content) > max_length:
-                        prompt_content = prompt_content[:max_length] + "..."
-                    timing_data.input_value = str(prompt_content)
-                
-                # Add invocation parameters from LLM config
-                timing_data.invocation_parameters = {
-                    "model": getattr(self.config, 'model', ''),
-                    "temperature": getattr(self.config, 'temperature', 0.0),
-                    "max_tokens": getattr(self.config, 'max_tokens', 0),
+            except Exception as e:
+                self.logger.error(f"Error in {self._provider_name} stream: {e}")
+                self.logger.debug(traceback.format_exc())
+                yield {
+                    "llm_response": f"An error occurred: {str(e)}", 
+                    "usage": {
+                        "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+                        "thinking_tokens": 0, "tool_calling_tokens": 0,
+                        "provider": self._provider_name, "model": getattr(self.config, 'model', 'unknown'),
+                        "request_id": None
+                    }
                 }
-                
-                accumulated_response = []
-                
-                # Execute appropriate streaming method
-                if not needs_function_calling:
-                    stream_generator = self._stream_simple(input)
-                else:
-                    stream_generator = self._stream_with_functions(input)
-                
-                # Process stream chunks
-                async for chunk in stream_generator:
-                    # Record token timing for first chunk
-                    if 'llm_response' in chunk and chunk['llm_response']:
-                        if not accumulated_response:  # First token
-                            timing_data.record_first_token()
-                        timing_data.record_token()  # Update last token time
-                        accumulated_response.append(chunk['llm_response'])
-                    
-                    # Record usage data if available
-                    if 'usage' in chunk:
-                        await self.observability.record_usage_data(timing_data, chunk['usage'])
-                    
+        else:
+            # WITHOUT observability - direct streaming execution
+            try:
+                async for chunk in self._execute_stream(input):
                     yield chunk
-                
-                # Add final response content if logging is enabled and safe
-                if (accumulated_response and 
-                    self.observability.config.should_log_content("responses") and
-                    hasattr(timing_data, 'output_value')):
-                    response_content = str(''.join(str(item) for item in accumulated_response))
-                    max_length = self.observability.config.get_content_length_limit("responses") 
-                    if len(response_content) > max_length:
-                        response_content = response_content[:max_length] + "..."
-                    timing_data.output_value = str(response_content)
+            except Exception as e:
+                self.logger.error(f"Error in {self._provider_name} stream: {e}")
+                self.logger.debug(traceback.format_exc())
+                yield {
+                    "llm_response": f"An error occurred: {str(e)}", 
+                    "usage": {
+                        "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+                        "thinking_tokens": 0, "tool_calling_tokens": 0,
+                        "provider": self._provider_name, "model": getattr(self.config, 'model', 'unknown'),
+                        "request_id": None
+                    }
+                }
+
+    async def _execute_stream(self, input: ILLMInput) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Execute core streaming logic without observability concerns.
+        
+        This method contains the actual streaming LLM execution logic and works
+        regardless of observability state.
+        
+        Args:
+            input: The LLM input containing system prompt, user message, tools, and options
+
+        Yields:
+            Dict containing 'llm_response' and optional 'usage' keys
+        """
+        try:
+            self.logger.info(f"Processing stream request - Regular Functions: {bool(input.regular_functions)}, "
+                           f"Background: {bool(input.background_tasks)}, "
+                           f"Structured: {bool(input.structure_type)}")
+
+            # Use the helper method to determine execution path
+            needs_function_calling = self._needs_function_calling(input)
+
+            # Execute appropriate streaming method
+            if not needs_function_calling:
+                stream_generator = self._stream_simple(input)
+            else:
+                stream_generator = self._stream_with_functions(input)
+            
+            # Yield stream chunks
+            async for chunk in stream_generator:
+                yield chunk
 
         except Exception as e:
             self.logger.error(f"Error in {self._provider_name} stream: {e}")
             self.logger.debug(traceback.format_exc())
-            raise
+            yield {
+                "llm_response": f"An error occurred: {str(e)}", 
+                "usage": self._standardize_usage_metadata(None)
+            }
 
 
 
@@ -728,51 +844,57 @@ class BaseLLMClient(ILLM, ABC):
     # UTILITY METHODS - Framework standardization helpers
     # ========================================================================
 
-    def _standardize_usage_metadata(self, raw_usage_metadata: Any, provider: str = None, *args) -> Dict[str, Any]:
-        """Standardize usage metadata from LLM providers.
+    @abstractmethod
+    def _extract_and_standardize_usage(self, response: Any) -> Dict[str, Any]:
+        """
+        Extract and standardize usage metadata from provider response.
+        
+        Each provider implements this to handle their specific response format
+        and return standardized usage metadata.
         
         Args:
-            raw_usage_metadata: Raw usage data from provider
-            provider: Provider name (ignored, uses self._provider_name)
-            *args: Additional arguments (ignored for compatibility)
-        
+            response: Provider-specific response object
+            
         Returns:
-            Standardized usage metadata dictionary
+            Standardized usage metadata dictionary with fields:
+            - input_tokens: Number of input tokens
+            - output_tokens: Number of output tokens  
+            - total_tokens: Total tokens used
+            - thinking_tokens: Reasoning/thinking tokens (if available)
+            - tool_calling_tokens: Function calling tokens (if available)
+            - provider: Provider name
+            - model: Model name used
+            - request_id: Request ID from provider (if available)
         """
-        # Use the provider name from the instance
-        provider_name = provider or self._provider_name or "generic"
-        
-        # Convert to standard format using utility function
-        standardized = standardize_usage_metadata(raw_usage_metadata, provider_name)
-        
-        # Convert to observability format (input_tokens, output_tokens, total_tokens)
-        return {
-            'input_tokens': standardized.get('prompt_tokens', 0),
-            'output_tokens': standardized.get('completion_tokens', 0),
-            'total_tokens': standardized.get('total_tokens', 0),
-        }
+        pass
     
     def _accumulate_usage_safely(self, current_usage: Dict[str, Any], accumulated_usage: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Safely accumulate usage metadata.
+        """
+        Safely accumulate usage metadata without in-place mutations.
         
         Args:
-            current_usage: Current usage data
-            accumulated_usage: Previously accumulated usage
+            current_usage: Current usage metadata
+            accumulated_usage: Previously accumulated usage (optional)
         
         Returns:
-            Updated accumulated usage
+            New accumulated usage dictionary
         """
         if accumulated_usage is None:
             return current_usage.copy() if current_usage else {}
         
         if current_usage is None:
-            return accumulated_usage.copy()
+            return accumulated_usage.copy() if accumulated_usage else {}
         
         # Safely accumulate each field
         return {
-            'input_tokens': accumulated_usage.get('input_tokens', 0) + current_usage.get('input_tokens', 0),
-            'output_tokens': accumulated_usage.get('output_tokens', 0) + current_usage.get('output_tokens', 0), 
-            'total_tokens': accumulated_usage.get('total_tokens', 0) + current_usage.get('total_tokens', 0),
+            "input_tokens": accumulated_usage.get("input_tokens", 0) + current_usage.get("input_tokens", 0),
+            "output_tokens": accumulated_usage.get("output_tokens", 0) + current_usage.get("output_tokens", 0),
+            "total_tokens": accumulated_usage.get("total_tokens", 0) + current_usage.get("total_tokens", 0),
+            "thinking_tokens": accumulated_usage.get("thinking_tokens", 0) + current_usage.get("thinking_tokens", 0),
+            "tool_calling_tokens": accumulated_usage.get("tool_calling_tokens", 0) + current_usage.get("tool_calling_tokens", 0),
+            "provider": current_usage.get("provider", accumulated_usage.get("provider", "unknown")),
+            "model": current_usage.get("model", accumulated_usage.get("model", "unknown")),
+            "request_id": current_usage.get("request_id", accumulated_usage.get("request_id"))
         }
 
     # ========================================================================
