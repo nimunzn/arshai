@@ -226,17 +226,40 @@ class ChatHistoryCallbackHandler:
         
         Args:
             conversation_id: ID of the conversation
-            num_messages: Number of latest messages to retrieve (default: 1)
+            num_messages: Number of latest messages to retrieve
         Returns:
-            Latest message or empty dict if no messages
+            Latest messages or empty list if no messages
         """
         try:
             result = await self.chat_history_client.get_messages(conversation_id)
-            logger.info(f"Retrieved latest message for conversation {conversation_id}")
-            return result.get("items", [])[0:num_messages]
+            logger.debug(f"Raw chat history result:{result}")
+            
+            # Parse the messages from the result structure
+            messages = result.get("messages", [])
+            
+            if not messages:
+                logger.info(f"No messages found for conversation {conversation_id}")
+                return []
+            
+            # Get the last N messages
+            recent_messages = messages[-num_messages:] if len(messages) >= num_messages else messages
+            
+            # Extract only the essential content for working memory
+            clean_messages = []
+            for msg in recent_messages:
+                clean_msg = {
+                    "sender": msg.get("responder", "unknown"),  # 'end_user' or 'AI'
+                    "text": msg.get("text", ""),
+                    "created_at": msg.get("created_at", "")
+                }
+                clean_messages.append(clean_msg)
+            
+            logger.info(f"Retrieved latest {len(clean_messages)} messages for conversation {conversation_id}")
+            return clean_messages
         except Exception as e:
-            logger.error(f"Error getting latest message from history service: {str(e)}")
-            return None
+            logger.error(f"Error getting latest messages from history service: {str(e)}")
+            return [] 
+       
 
     async def check_conversation_id(self, conversation_id: str) -> bool:
         """Check if a conversation ID is valid and accessible to the current user.
