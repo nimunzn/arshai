@@ -4,27 +4,27 @@
 
 ```mermaid
 graph TD
-    subgraph "Layer 3: Agentic Systems"
+    subgraph L3 ["Layer 3: Agentic Systems"]
         WF[Workflows] --> AG[Agents]
         MEM[Memory Systems] --> AG
         ORCH[Orchestration] --> AG
     end
     
-    subgraph "Layer 2: Agents" 
+    subgraph L2 ["Layer 2: Agents"] 
         AG --> TOOLS[Tool Integration]
         AG --> LOGIC[Custom Logic]
     end
     
-    subgraph "Layer 1: LLM Clients"
+    subgraph L1 ["Layer 1: LLM Clients"]
         LOGIC --> OPENAI[OpenAI]
         LOGIC --> AZURE[Azure OpenAI]
         LOGIC --> GEMINI[Google Gemini]
         LOGIC --> ROUTER[OpenRouter]
     end
     
-    style "Layer 3: Agentic Systems" fill:#e1f5fe
-    style "Layer 2: Agents" fill:#f3e5f5
-    style "Layer 1: LLM Clients" fill:#e8f5e8
+    style L3 fill:#e1f5fe
+    style L2 fill:#f3e5f5
+    style L1 fill:#e8f5e8
 ```
 
 ## Philosophy: Developer Authority First
