@@ -714,21 +714,6 @@ class OpenAIClient(BaseLLMClient):
                             
                             current_tool_call = tool_calls_in_progress[call_index]
                             
-                            # Check if this is a structure output function
-                            if (input.structure_type and 
-                                current_tool_call["function"]["name"] and 
-                                current_tool_call["function"]["name"].lower() == input.structure_type.__name__.lower()):
-                                # Handle structure output separately - yield immediately
-                                try:
-                                    if isinstance(current_tool_call["function"]["arguments"], str):
-                                        structured_response = parse_to_structure(current_tool_call["function"]["arguments"], input.structure_type)
-                                    else:
-                                        structured_response = parse_to_structure(json.dumps(current_tool_call["function"]["arguments"]), input.structure_type)
-                                    yield {"llm_response": structured_response, "usage": accumulated_usage}
-                                except Exception as e:
-                                    self.logger.error(f"Failed to parse structure output progressively: {str(e)}")
-                                continue
-                            
                             # Progressive execution: check if function is complete (OpenAI functions arrive complete)
                             if self._is_function_complete(current_tool_call["function"]):
                                 function_name = current_tool_call["function"]["name"]
