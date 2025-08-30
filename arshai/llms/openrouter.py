@@ -75,23 +75,32 @@ class OpenRouterClient(BaseLLMClient):
         except Exception as e:
             self.logger.warning(f"Error closing OpenRouter client: {e}")
     
-    def _initialize_client(self) -> Any:
+    def _initialize_client(self, api_key: str = None, base_url: str = None) -> Any:
         """
         Initialize the OpenRouter client with safe HTTP configuration.
+        
+        Args:
+            api_key: Optional API key. If not provided, uses OPENROUTER_API_KEY environment variable
+            base_url: Optional base URL for the API. If not provided, uses default OpenRouter URL
         
         Returns:
             OpenAI client instance configured for OpenRouter
             
         Raises:
-            ValueError: If OPENROUTER_API_KEY is not set in environment variables
+            ValueError: If API key is not provided and OPENROUTER_API_KEY is not set in environment variables
         """
-        # Check if API key is available in environment
-        api_key = os.environ.get("OPENROUTER_API_KEY")
+        # Check if API key is available
         if not api_key:
-            self.logger.error("OpenRouter API key not found in environment variables")
+            api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            self.logger.error("OpenRouter API key not found")
             raise ValueError(
-                "OpenRouter API key not found. Please set OPENROUTER_API_KEY environment variable."
+                "OpenRouter API key not found. Please provide api_key parameter or set OPENROUTER_API_KEY environment variable."
             )
+        
+        # Set the base URL (use provided or default to OpenRouter URL)
+        if not base_url:
+            base_url = "https://openrouter.ai/api/v1"
         
         # Get optional site URL and app name for OpenRouter headers
         site_url = os.environ.get("OPENROUTER_SITE_URL", "")
@@ -121,7 +130,7 @@ class OpenRouterClient(BaseLLMClient):
             # Create OpenRouter client with safe HTTP client
             client = OpenAI(
                 api_key=api_key,
-                base_url="https://openrouter.ai/api/v1",
+                base_url=base_url,
                 default_headers={
                     "HTTP-Referer": site_url,
                     "X-Title": app_name,
@@ -138,7 +147,7 @@ class OpenRouterClient(BaseLLMClient):
             # Fallback to original implementation
             return OpenAI(
                 api_key=api_key,
-                base_url="https://openrouter.ai/api/v1",
+                base_url=base_url,
                 default_headers={
                     "HTTP-Referer": site_url,
                     "X-Title": app_name,
@@ -155,7 +164,7 @@ class OpenRouterClient(BaseLLMClient):
                 # At least try to set a timeout for basic safety
                 return OpenAI(
                     api_key=api_key,
-                    base_url="https://openrouter.ai/api/v1",
+                    base_url=base_url,
                     default_headers={
                         "HTTP-Referer": site_url,
                         "X-Title": app_name,
@@ -168,7 +177,7 @@ class OpenRouterClient(BaseLLMClient):
                 # Last resort - basic client
                 return OpenAI(
                     api_key=api_key,
-                    base_url="https://openrouter.ai/api/v1",
+                    base_url=base_url,
                     default_headers={
                         "HTTP-Referer": site_url,
                         "X-Title": app_name,

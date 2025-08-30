@@ -75,22 +75,27 @@ class OpenAIClient(BaseLLMClient):
         except Exception as e:
             self.logger.warning(f"Error closing OpenAI client: {e}")
     
-    def _initialize_client(self) -> Any:
+    def _initialize_client(self, api_key: str = None, base_url: str = None) -> Any:
         """
         Initialize the OpenAI client with safe HTTP configuration.
+        
+        Args:
+            api_key: Optional API key. If not provided, uses OPENAI_API_KEY environment variable
+            base_url: Optional base URL for the API. If not provided, uses default OpenAI URL
         
         Returns:
             OpenAI client instance configured with API key
             
         Raises:
-            ValueError: If OPENAI_API_KEY is not set in environment variables
+            ValueError: If API key is not provided and OPENAI_API_KEY is not set in environment variables
         """
-        # Check if API key is available in environment
-        api_key = os.environ.get("OPENAI_API_KEY")
+        # Check if API key is available
         if not api_key:
-            self.logger.error("OpenAI API key not found in environment variables")
+            api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            self.logger.error("OpenAI API key not found")
             raise ValueError(
-                "OpenAI API key not found. Please set OPENAI_API_KEY environment variable."
+                "OpenAI API key not found. Please provide api_key parameter or set OPENAI_API_KEY environment variable."
             )
         
         try:
@@ -98,7 +103,11 @@ class OpenAIClient(BaseLLMClient):
             from arshai.clients.utils.safe_http_client import SafeHttpClientFactory
             
             self.logger.info("Creating OpenAI client with safe HTTP configuration")
-            client = SafeHttpClientFactory.create_openai_client(api_key=api_key)
+            # Pass base_url if provided
+            if base_url:
+                client = SafeHttpClientFactory.create_openai_client(api_key=api_key, base_url=base_url)
+            else:
+                client = SafeHttpClientFactory.create_openai_client(api_key=api_key)
             
             self.logger.info("OpenAI client created successfully with safe configuration")
             return client
@@ -106,7 +115,10 @@ class OpenAIClient(BaseLLMClient):
         except ImportError as e:
             self.logger.warning(f"Safe HTTP client factory not available: {e}, using default client")
             # Fallback to original implementation
-            return OpenAI(api_key=api_key)
+            client_kwargs = {"api_key": api_key}
+            if base_url:
+                client_kwargs["base_url"] = base_url
+            return OpenAI(**client_kwargs)
         
         except Exception as e:
             self.logger.error(f"Failed to create safe OpenAI client: {e}")
@@ -114,11 +126,17 @@ class OpenAIClient(BaseLLMClient):
             self.logger.info("Using fallback OpenAI client configuration")
             try:
                 # At least try to set a timeout for basic safety
-                return OpenAI(api_key=api_key, timeout=30.0)
+                client_kwargs = {"api_key": api_key, "timeout": 30.0}
+                if base_url:
+                    client_kwargs["base_url"] = base_url
+                return OpenAI(**client_kwargs)
             except Exception as fallback_error:
                 self.logger.error(f"Fallback client also failed: {fallback_error}")
                 # Last resort - basic client
-                return OpenAI(api_key=api_key)
+                client_kwargs = {"api_key": api_key}
+                if base_url:
+                    client_kwargs["base_url"] = base_url
+                return OpenAI(**client_kwargs)
 
     # ========================================================================
     # PROVIDER-SPECIFIC HELPER METHODS
