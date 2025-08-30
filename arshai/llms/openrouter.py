@@ -75,32 +75,26 @@ class OpenRouterClient(BaseLLMClient):
         except Exception as e:
             self.logger.warning(f"Error closing OpenRouter client: {e}")
     
-    def _initialize_client(self, api_key: str = None, base_url: str = None) -> Any:
+    def _initialize_client(self) -> Any:
         """
         Initialize the OpenRouter client with safe HTTP configuration.
-        
-        Args:
-            api_key: Optional API key. If not provided, uses OPENROUTER_API_KEY environment variable
-            base_url: Optional base URL for the API. If not provided, uses default OpenRouter URL
         
         Returns:
             OpenAI client instance configured for OpenRouter
             
         Raises:
-            ValueError: If API key is not provided and OPENROUTER_API_KEY is not set in environment variables
+            ValueError: If OPENROUTER_API_KEY is not set in environment variables
         """
-        # Check if API key is available
+        # Get API key from environment
+        api_key = os.environ.get("OPENROUTER_API_KEY")
         if not api_key:
-            api_key = os.environ.get("OPENROUTER_API_KEY")
-        if not api_key:
-            self.logger.error("OpenRouter API key not found")
+            self.logger.error("OpenRouter API key not found in environment variables")
             raise ValueError(
-                "OpenRouter API key not found. Please provide api_key parameter or set OPENROUTER_API_KEY environment variable."
+                "OpenRouter API key not found. Please set OPENROUTER_API_KEY environment variable."
             )
         
-        # Set the base URL (use provided or default to OpenRouter URL)
-        if not base_url:
-            base_url = "https://openrouter.ai/api/v1"
+        # Get base URL from environment or use default
+        base_url = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
         
         # Get optional site URL and app name for OpenRouter headers
         site_url = os.environ.get("OPENROUTER_SITE_URL", "")

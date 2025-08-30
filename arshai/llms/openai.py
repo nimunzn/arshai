@@ -75,28 +75,26 @@ class OpenAIClient(BaseLLMClient):
         except Exception as e:
             self.logger.warning(f"Error closing OpenAI client: {e}")
     
-    def _initialize_client(self, api_key: str = None, base_url: str = None) -> Any:
+    def _initialize_client(self) -> Any:
         """
         Initialize the OpenAI client with safe HTTP configuration.
         
-        Args:
-            api_key: Optional API key. If not provided, uses OPENAI_API_KEY environment variable
-            base_url: Optional base URL for the API. If not provided, uses default OpenAI URL
-        
         Returns:
-            OpenAI client instance configured with API key
+            OpenAI client instance configured with API key and optional base URL
             
         Raises:
-            ValueError: If API key is not provided and OPENAI_API_KEY is not set in environment variables
+            ValueError: If OPENAI_API_KEY is not set in environment variables
         """
-        # Check if API key is available
+        # Get API key from environment
+        api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
-            api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            self.logger.error("OpenAI API key not found")
+            self.logger.error("OpenAI API key not found in environment variables")
             raise ValueError(
-                "OpenAI API key not found. Please provide api_key parameter or set OPENAI_API_KEY environment variable."
+                "OpenAI API key not found. Please set OPENAI_API_KEY environment variable."
             )
+        
+        # Get optional base URL from environment (e.g., for Azure OpenAI or custom endpoints)
+        base_url = os.environ.get("OPENAI_BASE_URL")
         
         try:
             # Import the safe factory for better HTTP handling
